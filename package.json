@@ -1,0 +1,13 @@
+{
+  "name": "snowball-fight",
+  "version": "1.0.0",
+  "description": "Cozy wave-based snowball FPS game",
+  "type": "module",
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve ."
+  },
+  "keywords": ["game", "threejs", "fps", "snowball"],
+  "author": "Your Name",
+  "license": "MIT"
+}
