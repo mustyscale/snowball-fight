@@ -102,6 +102,16 @@ export class PowerUps {
     this.pool.push(new PowerUp(typeKey, position, this.scene));
   }
 
+  /**
+   * Spawn a specific power-up type at the given world position.
+   * @param {THREE.Vector3} position
+   * @param {string}        typeKey  - key from CONFIG.powerups.types
+   */
+  spawnType(position, typeKey) {
+    if (!CONFIG.powerups.types[typeKey]) return;
+    this.pool.push(new PowerUp(typeKey, position, this.scene));
+  }
+
   // ── Per-frame update ───────────────────────────────────────
 
   /**

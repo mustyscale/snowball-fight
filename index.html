@@ -29,6 +29,9 @@
 
   <!-- Three.js CDN r160 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+
+  <!-- Supabase (leaderboard) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 
@@ -68,10 +71,14 @@
       <!-- Best score (loaded from localStorage) -->
       <p id="bestScore" class="best-score hidden"></p>
 
+      <!-- Player name input -->
+      <input id="playerNameInput" class="player-name-input" placeholder="Enter your name..." maxlength="20" autocomplete="off" spellcheck="false" />
+
       <!-- Buttons -->
       <div class="menu-buttons">
         <button id="startBtn" class="btn btn-primary">▶ &nbsp;Start Game</button>
         <button id="howToBtn" class="btn btn-secondary">How to Play</button>
+        <button id="leaderboardBtn" class="btn btn-secondary">🏆 Leaderboard</button>
       </div>
 
       <!-- Collapsible controls panel -->
@@ -89,6 +96,17 @@
           <li><strong>Frosty ⛄</strong>Standard snowman</li>
           <li><strong>Speedy 💨</strong>Fast zigzag runner</li>
           <li><strong>Chonky 🏔️</strong>Big, 3-shot spread</li>
+          <li><strong>Sniper 🎯</strong>Laser charge shot</li>
+          <li><strong>Bomber 💥</strong>Explodes on death</li>
+          <li><strong>Healer 💚</strong>Heals nearby allies</li>
+          <li><strong>Shield 🛡️</strong>Absorbs 60% damage</li>
+          <li><strong>Teleporter ✨</strong>Blinks every 3s</li>
+        </ul>
+        <h3 style="margin-top:0.75rem">Boss Waves</h3>
+        <ul>
+          <li><strong>Wave 5, 10, 15…</strong>Frost King appears!</li>
+          <li>3 phases — gets faster &amp; spreads more shots</li>
+          <li>Drops a guaranteed power-up on defeat</li>
         </ul>
       </div>
 
@@ -115,6 +133,13 @@
         <div id="healthFill" class="bar-fill"></div>
       </div>
       <span id="healthText">100</span>
+    </div>
+
+    <!-- Boss health bar — top center (hidden by default) -->
+    <div id="bossBar" class="hidden">
+      <span id="bossName">❄️ Frost King</span>
+      <div id="bossBarTrack"><div id="bossBarFill"></div></div>
+      <span id="bossPhase">Phase 1</span>
     </div>
 
     <!-- Wave + enemies — top center -->
@@ -205,8 +230,23 @@
       <div class="death-buttons">
         <button id="restartBtn" class="btn btn-primary">▶ &nbsp;Play Again</button>
         <button id="menuBtn" class="btn btn-secondary">Main Menu</button>
+        <button id="leaderboardBtnDeath" class="btn btn-secondary">🏆 Leaderboard</button>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Leaderboard modal (z-index 25, above all screens) -->
+  <div id="leaderboardModal" class="hidden">
+    <div class="lb-inner">
+      <h2>🏆 Leaderboard</h2>
+      <div class="lb-tabs">
+        <button class="lb-tab active" data-period="alltime">All Time</button>
+        <button class="lb-tab" data-period="weekly">Weekly</button>
+        <button class="lb-tab" data-period="daily">Daily</button>
+      </div>
+      <div id="lbRows"></div>
+      <button id="lbClose" class="btn btn-secondary">Close</button>
     </div>
   </div>
 

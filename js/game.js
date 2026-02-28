@@ -5,13 +5,14 @@
  * snowball object pool, UI wiring, save system, screen effects.
  */
 
-import { CONFIG }    from './config.js';
-import { Player }    from './player.js';
-import { Enemies }   from './enemies.js';
-import { Waves }     from './waves.js';
-import { PowerUps }  from './powerups.js';
-import { Particles } from './particles.js';
-import { GameMap }   from './map.js';
+import { CONFIG }      from './config.js';
+import { Player }      from './player.js';
+import { Enemies }     from './enemies.js';
+import { Waves }       from './waves.js';
+import { PowerUps }    from './powerups.js';
+import { Particles }   from './particles.js';
+import { GameMap }     from './map.js';
+import { Leaderboard } from './leaderboard.js';
 
 // ── Mobile detection ───────────────────────────────────────
 const IS_MOBILE = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -80,6 +81,7 @@ class Game {
     this.powerUpSys  = null;
     this.particleSys = null;
     this.mapSys      = null;
+    this.leaderboard = null;
 
     // Accumulated clock time for tracking combo (seconds)
     this._elapsedTime = 0;
@@ -159,6 +161,8 @@ class Game {
     this.waveSys     = new Waves(this.enemySys);
 
     this._initSnowballPool();
+
+    this.leaderboard = new Leaderboard();
   }
 
   // ── Snowball Object Pool ────────────────────────────────────
@@ -216,6 +220,8 @@ class Game {
 
     // Clear any wave messages
     document.getElementById('waveMessage')?.classList.add('hidden');
+    document.getElementById('bossBar')?.classList.add('hidden');
+    document.getElementById('leaderboardModal')?.classList.add('hidden');
 
     // UI transitions
     document.getElementById('mainMenu').classList.add('hidden');
@@ -261,9 +267,16 @@ class Game {
     document.getElementById('lockHint')?.classList.add('hidden');
     document.getElementById('waveMessage')?.classList.add('hidden');
     document.getElementById('mobileControls')?.classList.add('hidden');
+    document.getElementById('bossBar')?.classList.add('hidden');
     document.getElementById('deathScreen').classList.remove('hidden');
 
     if (document.pointerLockElement) document.exitPointerLock();
+
+    // Auto-submit score to leaderboard
+    const playerName = localStorage.getItem('snowball-fight-name')?.trim();
+    if (playerName && this.score > 100 && this.leaderboard) {
+      this.leaderboard.submit(playerName, this.score, this.wave, this.kills);
+    }
   }
 
   // ── Main Loop ──────────────────────────────────────────────
@@ -304,6 +317,21 @@ class Game {
     // 6. Enemies move + fire back
     const enemyThrows = this.enemySys.update(dt, this.player.position, speedMult);
     for (const t of enemyThrows) this._spawnSnowball(t, false);
+
+    // 6b. Wire boss phase-change callback if boss just spawned
+    if (this.enemySys.boss?.isAlive && !this.enemySys.boss.onPhaseChange) {
+      this.enemySys.boss.onPhaseChange = (phase) => {
+        this._showWaveMessage(`PHASE ${phase + 1}!`, 'accent', 2.5);
+        this._triggerShake(0.1, 0.5);
+      };
+    }
+
+    // 6c. Boss health bar
+    if (this.enemySys.boss?.isAlive) {
+      this._updateBossBar();
+    } else {
+      document.getElementById('bossBar')?.classList.add('hidden');
+    }
 
     // 7. Wave completion check
     if (this.enemySys.isEmpty() && this.waveSys.isWaveComplete()) {
@@ -486,11 +514,56 @@ class Game {
 
   _onEnemyKilled(enemy) {
     this.kills++;
-    const points = enemy.cfg.score * this.combo;
+    const points = (enemy.cfg?.score ?? 0) * this.combo;
     this.score  += points;
     this._updateScoreHUD();
-    this._showScorePopup(`+${points}`);
+    if (points > 0) this._showScorePopup(`+${points}`);
 
+    // Bomber: explodes on death — damages player and nearby enemies
+    if (enemy.cfg?.explodeOnDeath) {
+      const explodePos    = enemy.mesh.position.clone();
+      const explodeDamage = enemy.cfg.explodeDamage ?? 50;
+      const explodeRadius = enemy.cfg.explodeRadius ?? 4;
+
+      // Damage nearby enemies
+      const aoeTargets = this.enemySys.getEnemiesInRadius(explodePos, explodeRadius);
+      for (const t of aoeTargets) {
+        if (t === enemy) continue;
+        const died = t.takeDamage(explodeDamage);
+        if (died) {
+          this.particleSys.deathBurst(
+            t.mesh.position.clone().setY(t.cfg.size * 0.7), t.cfg.color,
+          );
+          this._onEnemyKilled(t);
+        }
+      }
+
+      // Damage player if close
+      if (this.player.isAlive) {
+        const pd = explodePos.distanceTo(this.player.position);
+        if (pd < explodeRadius) {
+          this.player.takeDamage(explodeDamage);
+          this._triggerDamageFlash();
+          this._triggerShake(0.1, 0.4);
+        }
+      }
+
+      this.particleSys.burst(explodePos, 0xff4400, 30, { speed: 9, lifetime: 1.2, size: 0.12 });
+      this._triggerShake(0.08, 0.4);
+    }
+
+    // Boss: guaranteed power-up drop + special fanfare
+    if (enemy.type === 'boss') {
+      const keys    = CONFIG.boss.guaranteedDrop;
+      const typeKey = keys[Math.floor(Math.random() * keys.length)];
+      this.powerUpSys.spawnType(enemy.mesh.position.clone(), typeKey);
+      document.getElementById('bossBar')?.classList.add('hidden');
+      this._showWaveMessage('FROST KING DEFEATED! 👑', 'gold', 4);
+      this._triggerShake(0.18, 1.0);
+      return; // skip random drop for boss
+    }
+
+    // Normal enemy: random power-up drop
     if (Math.random() < CONFIG.powerups.spawnChance) {
       this.powerUpSys.spawn(enemy.mesh.position.clone());
     }
@@ -553,7 +626,12 @@ class Game {
 
     setTimeout(() => {
       if (this.state !== 'playing') return;
-      this._showWaveMessage(`WAVE ${this.wave + 1}`, 'accent', CONFIG.waves.nextDisplayDuration);
+      const isBoss = this.waveSys.isBossWave(this.wave);
+      const msg    = isBoss
+        ? `❄️ BOSS BATTLE\nWave ${this.wave + 1}`
+        : `WAVE ${this.wave + 1}`;
+      const color  = isBoss ? 'gold' : 'accent';
+      this._showWaveMessage(msg, color, CONFIG.waves.nextDisplayDuration);
     }, announceDelay);
 
     setTimeout(() => {
@@ -674,6 +752,19 @@ class Game {
     }
   }
 
+  // ── Boss Bar ───────────────────────────────────────────────
+
+  _updateBossBar() {
+    const boss = this.enemySys.boss;
+    const bar  = document.getElementById('bossBar');
+    if (!bar || !boss) return;
+
+    bar.classList.remove('hidden');
+    const pct = (boss.health / boss.maxHealth) * 100;
+    document.getElementById('bossBarFill').style.width = `${pct.toFixed(1)}%`;
+    document.getElementById('bossPhase').textContent   = `Phase ${boss.phase + 1}`;
+  }
+
   // ── UI Bindings ────────────────────────────────────────────
 
   _bindUI() {
@@ -687,11 +778,30 @@ class Game {
       document.getElementById('lockHint')?.classList.add('hidden');
       document.getElementById('waveMessage')?.classList.add('hidden');
       document.getElementById('mobileControls')?.classList.add('hidden');
+      document.getElementById('bossBar')?.classList.add('hidden');
       document.getElementById('mainMenu').classList.remove('hidden');
       this._updateMenuBestScore();
     });
     document.getElementById('howToBtn')?.addEventListener('click', () => {
       document.getElementById('howToPanel')?.classList.toggle('hidden');
+    });
+
+    // Player name input — persists to localStorage
+    const nameInput = document.getElementById('playerNameInput');
+    if (nameInput) {
+      const saved = localStorage.getItem('snowball-fight-name');
+      if (saved) nameInput.value = saved;
+      nameInput.addEventListener('input', () => {
+        localStorage.setItem('snowball-fight-name', nameInput.value.trim());
+      });
+    }
+
+    // Leaderboard buttons
+    document.getElementById('leaderboardBtn')?.addEventListener('click', () => {
+      this.leaderboard?.showModal();
+    });
+    document.getElementById('leaderboardBtnDeath')?.addEventListener('click', () => {
+      this.leaderboard?.showModal();
     });
   }
 }
