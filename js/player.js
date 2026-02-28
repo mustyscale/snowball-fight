@@ -11,6 +11,8 @@
 
 import { CONFIG } from './config.js';
 
+const IS_MOBILE = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
 export class Player {
   /**
    * @param {THREE.PerspectiveCamera} camera
@@ -49,6 +51,20 @@ export class Player {
     // Queue of throw events for Game to process each frame
     this.pendingThrows = [];
 
+    // ── Mobile state ──────────────────────────────────────
+    this._isMobile        = IS_MOBILE;
+    this._mobileMove      = { x: 0, y: 0 };
+    this._throwBtnHeld    = false;
+    this._joystickTouchId = null;
+    this._lookTouchId     = null;
+    this._lookLastX       = 0;
+    this._lookLastY       = 0;
+    this._joystickOriginX = 0;
+    this._joystickOriginY = 0;
+    this._joystickMaxR    = 48;
+
+    if (IS_MOBILE) this.isLocked = true;
+
     this._bindInputs();
   }
 
@@ -64,34 +80,130 @@ export class Player {
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.isSprinting = false;
     });
 
-    // Mouse look — only active while pointer is locked
-    window.addEventListener('mousemove', (e) => {
-      if (!this.isLocked) return;
-      const s = this.cfg.mouseSensitivity;
-      this.yaw  -= e.movementX * s;
-      this.pitch = Math.max(
-        -Math.PI / 2,
-        Math.min(Math.PI / 2, this.pitch - e.movementY * s),
-      );
-    });
+    if (!IS_MOBILE) {
+      // Mouse look — only active while pointer is locked
+      window.addEventListener('mousemove', (e) => {
+        if (!this.isLocked) return;
+        const s = this.cfg.mouseSensitivity;
+        this.yaw  -= e.movementX * s;
+        this.pitch = Math.max(
+          -Math.PI / 2,
+          Math.min(Math.PI / 2, this.pitch - e.movementY * s),
+        );
+      });
 
-    // Left-click throw (only when locked)
-    window.addEventListener('mousedown', (e) => {
-      if (e.button === 0 && this.isLocked) this.wantThrow = true;
-    });
+      // Left-click throw (only when locked)
+      window.addEventListener('mousedown', (e) => {
+        if (e.button === 0 && this.isLocked) this.wantThrow = true;
+      });
 
-    // Pointer lock — request on canvas click
-    const canvas = document.getElementById('gameCanvas');
-    canvas.addEventListener('click', () => {
-      if (!document.pointerLockElement) canvas.requestPointerLock();
-    });
+      // Pointer lock — request on canvas click
+      const canvas = document.getElementById('gameCanvas');
+      canvas.addEventListener('click', () => {
+        if (!document.pointerLockElement) canvas.requestPointerLock();
+      });
 
-    // Track lock state changes
-    document.addEventListener('pointerlockchange', () => {
-      this.isLocked = !!document.pointerLockElement;
-      const hint = document.getElementById('lockHint');
-      if (hint) hint.classList.toggle('hidden', this.isLocked);
-    });
+      // Track lock state changes
+      document.addEventListener('pointerlockchange', () => {
+        this.isLocked = !!document.pointerLockElement;
+        const hint = document.getElementById('lockHint');
+        if (hint) hint.classList.toggle('hidden', this.isLocked);
+      });
+    }
+
+    if (IS_MOBILE) this._bindMobileInputs();
+  }
+
+  // ── Mobile input bindings ──────────────────────────────────
+
+  _bindMobileInputs() {
+    const mc = document.getElementById('mobileControls');
+    mc.addEventListener('touchstart',  this._onMobileTouchStart.bind(this), { passive: false });
+    mc.addEventListener('touchmove',   this._onMobileTouchMove.bind(this),  { passive: false });
+    mc.addEventListener('touchend',    this._onMobileTouchEnd.bind(this),   { passive: false });
+    mc.addEventListener('touchcancel', this._onMobileTouchEnd.bind(this),   { passive: false });
+
+    const tb = document.getElementById('throwBtn');
+    tb.addEventListener('touchstart', (e) => {
+      e.preventDefault(); e.stopPropagation(); this._throwBtnHeld = true;
+    }, { passive: false });
+    tb.addEventListener('touchend', (e) => {
+      e.preventDefault(); e.stopPropagation(); this._throwBtnHeld = false;
+    }, { passive: false });
+  }
+
+  _onMobileTouchStart(e) {
+    e.preventDefault();
+    for (const touch of e.changedTouches) {
+      const x = touch.clientX;
+      const y = touch.clientY;
+      const halfW = window.innerWidth / 2;
+
+      if (x < halfW && this._joystickTouchId === null) {
+        // Left side → joystick
+        this._joystickTouchId = touch.identifier;
+        const base = document.getElementById('joystickBase');
+        const rect = base.getBoundingClientRect();
+        this._joystickOriginX = rect.left + rect.width / 2;
+        this._joystickOriginY = rect.top  + rect.height / 2;
+        this._applyJoystick(x - this._joystickOriginX, y - this._joystickOriginY);
+      } else if (x >= halfW && this._lookTouchId === null) {
+        // Right side → look
+        this._lookTouchId = touch.identifier;
+        this._lookLastX   = x;
+        this._lookLastY   = y;
+      }
+    }
+  }
+
+  _onMobileTouchMove(e) {
+    e.preventDefault();
+    for (const touch of e.changedTouches) {
+      if (touch.identifier === this._joystickTouchId) {
+        this._applyJoystick(touch.clientX - this._joystickOriginX, touch.clientY - this._joystickOriginY);
+      } else if (touch.identifier === this._lookTouchId) {
+        const dx = touch.clientX - this._lookLastX;
+        const dy = touch.clientY - this._lookLastY;
+        this._lookLastX = touch.clientX;
+        this._lookLastY = touch.clientY;
+        const s = this.cfg.mouseSensitivity * 2.5;
+        this.yaw  -= dx * s;
+        this.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.pitch - dy * s));
+      }
+    }
+  }
+
+  _onMobileTouchEnd(e) {
+    e.preventDefault();
+    for (const touch of e.changedTouches) {
+      if (touch.identifier === this._joystickTouchId) {
+        this._joystickTouchId = null;
+        this._mobileMove      = { x: 0, y: 0 };
+        this.isSprinting      = false;
+        const thumb = document.getElementById('joystickThumb');
+        if (thumb) thumb.style.transform = '';
+      } else if (touch.identifier === this._lookTouchId) {
+        this._lookTouchId = null;
+      }
+    }
+  }
+
+  _applyJoystick(dx, dy) {
+    const maxR = this._joystickMaxR;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const clampedDist = Math.min(dist, maxR);
+    const angle = Math.atan2(dy, dx);
+    const clampedX = Math.cos(angle) * clampedDist;
+    const clampedY = Math.sin(angle) * clampedDist;
+
+    this._mobileMove.x = clampedX / maxR;
+    this._mobileMove.y = clampedY / maxR;
+
+    // Auto-sprint when joystick pushed far
+    this.isSprinting = (clampedDist / maxR) > 0.7;
+
+    const thumb = document.getElementById('joystickThumb');
+    if (thumb) thumb.style.transform = `translate(${clampedX}px, ${clampedY}px)`;
   }
 
   // ── Per-frame update ───────────────────────────────────────
@@ -106,6 +218,8 @@ export class Player {
     this._updateCamera();
     this._updateThrowCooldown(dt);
     this._updateRegen(dt);
+
+    if (this._throwBtnHeld) this.wantThrow = true;
 
     if (this.wantThrow && this.throwTimer <= 0) {
       this._doThrow();
@@ -127,6 +241,11 @@ export class Player {
     if (this.keys['KeyS']) dir.z += 1;
     if (this.keys['KeyA']) dir.x -= 1;
     if (this.keys['KeyD']) dir.x += 1;
+
+    if (this._isMobile) {
+      dir.x += this._mobileMove.x;
+      dir.z += this._mobileMove.y;
+    }
 
     if (dir.lengthSq() > 0) {
       dir.normalize();
@@ -298,6 +417,16 @@ export class Player {
     this.pendingThrows   = [];
     this.keys            = {};
     this.wantThrow       = false;
+
+    // Mobile state
+    this._mobileMove      = { x: 0, y: 0 };
+    this._throwBtnHeld    = false;
+    this._joystickTouchId = null;
+    this._lookTouchId     = null;
+    if (this._isMobile) this.isLocked = true;
+    const thumb = document.getElementById('joystickThumb');
+    if (thumb) thumb.style.transform = '';
+
     this._updateHealthHUD();
     this._updateCamera();
   }

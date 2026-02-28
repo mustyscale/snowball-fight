@@ -13,6 +13,9 @@ import { PowerUps }  from './powerups.js';
 import { Particles } from './particles.js';
 import { GameMap }   from './map.js';
 
+// ── Mobile detection ───────────────────────────────────────
+const IS_MOBILE = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
 // ── Feature detection ──────────────────────────────────────
 if (!window.WebGLRenderingContext) {
   document.body.innerHTML = `
@@ -93,6 +96,11 @@ class Game {
   init() {
     try {
       this._initRenderer();
+      if (IS_MOBILE) {
+        this.renderer.shadowMap.enabled = false;
+        CONFIG.render.particlePoolSize  = 150;
+        CONFIG.render.maxSnowballs      = 30;
+      }
       this._initScene();
       this._initSystems();
       this._startRenderLoop();
@@ -213,7 +221,7 @@ class Game {
     document.getElementById('mainMenu').classList.add('hidden');
     document.getElementById('deathScreen').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
-    document.getElementById('lockHint')?.classList.remove('hidden');
+    if (!IS_MOBILE) document.getElementById('lockHint')?.classList.remove('hidden');
 
     this.state = 'playing';
     this.clock.start();
@@ -223,7 +231,11 @@ class Game {
     this._updateScoreHUD();
     this._updateEnemiesHUD();
 
-    document.getElementById('gameCanvas')?.requestPointerLock();
+    if (IS_MOBILE) {
+      document.getElementById('mobileControls')?.classList.remove('hidden');
+    } else {
+      document.getElementById('gameCanvas')?.requestPointerLock();
+    }
   }
 
   gameOver() {
@@ -248,6 +260,7 @@ class Game {
     document.getElementById('hud').classList.add('hidden');
     document.getElementById('lockHint')?.classList.add('hidden');
     document.getElementById('waveMessage')?.classList.add('hidden');
+    document.getElementById('mobileControls')?.classList.add('hidden');
     document.getElementById('deathScreen').classList.remove('hidden');
 
     if (document.pointerLockElement) document.exitPointerLock();
@@ -673,6 +686,7 @@ class Game {
       document.getElementById('hud').classList.add('hidden');
       document.getElementById('lockHint')?.classList.add('hidden');
       document.getElementById('waveMessage')?.classList.add('hidden');
+      document.getElementById('mobileControls')?.classList.add('hidden');
       document.getElementById('mainMenu').classList.remove('hidden');
       this._updateMenuBestScore();
     });
