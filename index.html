@@ -28,12 +28,22 @@
   <link rel="stylesheet" href="css/style.css" />
 
   <!-- Three.js CDN r160 -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
 </head>
 <body>
 
   <!-- Game Canvas -->
   <canvas id="gameCanvas"></canvas>
+
+  <!-- ═══════════════════════════════════
+       Screen overlays (always in DOM)
+       ═══════════════════════════════════ -->
+
+  <!-- Red flash on damage -->
+  <div id="damageFlash"></div>
+
+  <!-- Low health vignette -->
+  <div id="vignetteOverlay"></div>
 
   <!-- ═══════════════════════════════════
        Main Menu
@@ -55,6 +65,9 @@
 
       <p class="game-subtitle">Survive the snowstorm. Outlast every wave.</p>
 
+      <!-- Best score (loaded from localStorage) -->
+      <p id="bestScore" class="best-score hidden"></p>
+
       <!-- Buttons -->
       <div class="menu-buttons">
         <button id="startBtn" class="btn btn-primary">▶ &nbsp;Start Game</button>
@@ -70,6 +83,12 @@
           <li><strong>Click</strong>Throw</li>
           <li><strong>Shift</strong>Sprint</li>
           <li><strong>Esc</strong>Unlock cursor</li>
+        </ul>
+        <h3 style="margin-top:0.75rem">Enemy Types</h3>
+        <ul>
+          <li><strong>Frosty ⛄</strong>Standard snowman</li>
+          <li><strong>Speedy 💨</strong>Fast zigzag runner</li>
+          <li><strong>Chonky 🏔️</strong>Big, 3-shot spread</li>
         </ul>
       </div>
 
@@ -90,19 +109,29 @@
       <span id="healthText">100</span>
     </div>
 
-    <!-- Wave — top center -->
+    <!-- Wave + enemies — top center -->
     <div id="waveInfo">
       <span class="hud-label">Wave</span>
       <span id="waveNumber">1</span>
+      <span class="hud-divider">|</span>
+      <span id="enemiesCount" class="enemies-count">0</span>
+      <span class="hud-label">left</span>
     </div>
 
     <!-- Score — bottom right -->
     <div id="scoreDisplay">
       <span class="hud-label">Score</span>
       <span id="scoreValue">0</span>
+      <span id="scorePopup" class="score-popup"></span>
     </div>
 
-    <!-- Combo — bottom center -->
+    <!-- Active power-ups — bottom left -->
+    <div id="activePowers"></div>
+
+    <!-- Power-up pickup notification — center bottom -->
+    <div id="powerupNotif" class="hidden powerup-notif"></div>
+
+    <!-- Combo — above throw cooldown -->
     <div id="comboDisplay" class="hidden">
       <span id="comboText">x2 COMBO</span>
     </div>
@@ -118,6 +147,14 @@
       <div class="ch-v"></div>
     </div>
 
+    <!-- Wave message overlay (center screen) -->
+    <div id="waveMessage" class="hidden wave-msg"></div>
+
+    <!-- Pointer-lock hint (shown when playing but not locked) -->
+    <div id="lockHint" class="hidden">
+      <div class="lock-hint-inner">Click to aim</div>
+    </div>
+
   </div>
 
   <!-- ═══════════════════════════════════
@@ -127,6 +164,12 @@
     <div class="death-container">
 
       <h2>You melted ☃️</h2>
+
+      <!-- Random encouraging message -->
+      <p id="deathMessage" class="death-message"></p>
+
+      <!-- New high score indicator -->
+      <div id="newHighScore" class="new-highscore hidden">🏆 New High Score!</div>
 
       <div class="death-divider"></div>
 

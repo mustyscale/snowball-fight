@@ -1,73 +1,126 @@
 /**
  * game.js — Main game controller
- * Initialises Three.js, owns the game loop, and wires everything together.
+ *
+ * Owns: Three.js renderer/scene/camera, the game loop, all entity arrays,
+ * snowball object pool, UI wiring, save system, screen effects.
  */
 
-import { CONFIG } from './config.js';
-import { Player }  from './player.js';
-import { Enemies } from './enemies.js';
-import { Waves }   from './waves.js';
-import { PowerUps } from './powerups.js';
+import { CONFIG }    from './config.js';
+import { Player }    from './player.js';
+import { Enemies }   from './enemies.js';
+import { Waves }     from './waves.js';
+import { PowerUps }  from './powerups.js';
 import { Particles } from './particles.js';
-import { GameMap } from './map.js';
+import { GameMap }   from './map.js';
+
+// ── Feature detection ──────────────────────────────────────
+if (!window.WebGLRenderingContext) {
+  document.body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;
+      font-family:sans-serif;color:#fff;background:#0A1628;text-align:center;padding:2rem">
+      <div>
+        <h2 style="margin-bottom:1rem">WebGL not supported ❄️</h2>
+        <p style="opacity:.6">Please open this game in a modern browser<br>
+           (Chrome, Firefox, Edge, or Safari 15+)</p>
+      </div>
+    </div>`;
+  throw new Error('WebGL not supported');
+}
+
+const DEATH_MESSAGES = [
+  'So close! Try again! 💪',
+  "You're getting better! ❄️",
+  'Great effort! ⭐',
+  'Keep it up! 🌟',
+  'Nice run! Play again? 🎮',
+];
 
 class Game {
   constructor() {
-    // Three.js core
+    // Three.js core — created in init()
     this.scene    = null;
     this.camera   = null;
     this.renderer = null;
     this.clock    = new THREE.Clock(false);
 
-    // Frame timing
     this.deltaTime = 0;
 
     // Game state
-    this.state = 'menu';   // 'menu' | 'playing' | 'dead'
-    this.score = 0;
-    this.wave  = 0;
-    this.kills = 0;
-    this.combo = 1;
+    this.state     = 'menu';
+    this.score     = 0;
+    this.wave      = 0;
+    this.kills     = 0;
+    this.combo     = 1;
     this.bestCombo = 1;
-    this.comboTimer = 0;
+    this.lastHitTime = -999;   // timestamp of last hit for combo window
 
-    // Entity collections
-    this.snowballs  = [];   // { mesh, velocity, radius, fromPlayer, lifetime }
-    this.enemies    = [];
-    this.powerups   = [];
-    this.particles  = [];
+    // Active snowball array
+    this.snowballs = [];
 
-    // Sub-systems (instantiated after init)
-    this.player    = null;
-    this.enemySys  = null;
-    this.waveSys   = null;
-    this.powerUpSys = null;
+    // Object pool internals
+    this._sbFreePool  = [];
+    this._sbMatPlayer = null;
+    this._sbMatEnemy  = null;
+    this._sbBasePGeo  = null;   // player snowball geometry (white)
+    this._sbBaseEGeo  = null;   // enemy snowball geometry (blue tint)
+
+    // Screen shake state
+    this._shake = { amount: 0, duration: 0, timer: 0 };
+
+    // Wave message timer
+    this._waveMsgTimer = null;
+
+    // Sub-systems
+    this.player      = null;
+    this.enemySys    = null;
+    this.waveSys     = null;
+    this.powerUpSys  = null;
     this.particleSys = null;
-    this.mapSys    = null;
+    this.mapSys      = null;
 
-    // Bind UI buttons
+    // Accumulated clock time for tracking combo (seconds)
+    this._elapsedTime = 0;
+
+    // Save data
+    this._save = { bestScore: 0, bestWave: 0, totalKills: 0, totalGames: 0 };
+
     this._bindUI();
+    this._loadSave();
   }
 
   // ── Initialisation ─────────────────────────────────────────
 
   init() {
-    this._initRenderer();
-    this._initScene();
-    this._initSystems();
-    this._startRenderLoop();
-    console.log('[Game] Initialised ✓');
+    try {
+      this._initRenderer();
+      this._initScene();
+      this._initSystems();
+      this._startRenderLoop();
+    } catch (err) {
+      this._showFatalError(err);
+    }
+  }
+
+  _showFatalError(err) {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;' +
+      'justify-content:center;background:#0A1628;color:#fff;font-family:sans-serif;' +
+      'text-align:center;padding:2rem;z-index:9999;';
+    el.innerHTML = `<div><h2 style="margin-bottom:.75rem">Failed to start game ❄️</h2>` +
+      `<p style="opacity:.6;max-width:360px">Try refreshing the page or using a different browser.<br>` +
+      `<small style="opacity:.4">${err?.message ?? ''}</small></p></div>`;
+    document.body.appendChild(el);
   }
 
   _initRenderer() {
     const canvas = document.getElementById('gameCanvas');
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.shadowMap.type    = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping       = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     window.addEventListener('resize', () => {
       this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -78,98 +131,126 @@ class Game {
 
   _initScene() {
     const cfg = CONFIG.render;
-
-    // Camera
     this.camera = new THREE.PerspectiveCamera(
       cfg.fov,
       window.innerWidth / window.innerHeight,
       cfg.near,
       cfg.far,
     );
-
-    // Scene + background sky colour
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(CONFIG.arena.skyColor);
-    this.scene.fog = new THREE.Fog(CONFIG.arena.skyColor, 60, CONFIG.render.far);
-
-    // Ambient light — soft winter feel
-    const ambient = new THREE.AmbientLight(0xd0e8ff, 0.6);
-    this.scene.add(ambient);
-
-    // Directional sun (with shadows)
-    const sun = new THREE.DirectionalLight(0xfff5e0, 1.4);
-    sun.position.set(30, 60, 20);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(cfg.shadowMapSize, cfg.shadowMapSize);
-    sun.shadow.camera.near = 1;
-    sun.shadow.camera.far  = 200;
-    sun.shadow.camera.left   = -CONFIG.arena.size;
-    sun.shadow.camera.right  =  CONFIG.arena.size;
-    sun.shadow.camera.top    =  CONFIG.arena.size;
-    sun.shadow.camera.bottom = -CONFIG.arena.size;
-    this.scene.add(sun);
-
-    // Fill light from opposite side
-    const fill = new THREE.DirectionalLight(0xaac8ff, 0.4);
-    fill.position.set(-20, 30, -20);
-    this.scene.add(fill);
   }
 
   _initSystems() {
-    this.player     = new Player(this.camera, this.scene);
-    this.mapSys     = new GameMap(this.scene);
-    this.particleSys = new Particles(this.scene);
-    this.enemySys   = new Enemies(this.scene, this.particleSys);
-    this.powerUpSys = new PowerUps(this.scene);
-    this.waveSys    = new Waves(this.enemySys);
-
-    // Build the arena geometry
+    this.mapSys      = new GameMap(this.scene);
     this.mapSys.build();
+
+    this.player      = new Player(this.camera, this.scene);
+    this.particleSys = new Particles(this.scene);
+    this.enemySys    = new Enemies(this.scene, this.particleSys);
+    this.powerUpSys  = new PowerUps(this.scene);
+    this.waveSys     = new Waves(this.enemySys);
+
+    this._initSnowballPool();
   }
 
-  // ── Game flow ──────────────────────────────────────────────
+  // ── Snowball Object Pool ────────────────────────────────────
+
+  _initSnowballPool() {
+    const max = CONFIG.render.maxSnowballs;
+
+    this._sbMatPlayer = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    this._sbMatEnemy  = new THREE.MeshLambertMaterial({ color: 0xaaddff });
+    this._sbBaseGeo   = new THREE.SphereGeometry(1, 8, 8);
+
+    for (let i = 0; i < max; i++) {
+      const mesh = new THREE.Mesh(
+        this._sbBaseGeo,
+        i % 2 === 0 ? this._sbMatPlayer : this._sbMatEnemy,
+      );
+      mesh.castShadow = true;
+      mesh.visible    = false;
+      this.scene.add(mesh);
+
+      this._sbFreePool.push({
+        mesh,
+        velocity:   new THREE.Vector3(),
+        fromPlayer: true,
+        radius:     CONFIG.physics.snowballRadius,
+        lifetime:   0,
+        damage:     CONFIG.player.baseDamage,
+        explosive:  false,
+      });
+    }
+  }
+
+  // ── Game Flow ──────────────────────────────────────────────
 
   startGame() {
-    // Reset state
-    this.score     = 0;
-    this.wave      = 0;
-    this.kills     = 0;
-    this.combo     = 1;
-    this.bestCombo = 1;
-    this.comboTimer = 0;
-    this.snowballs  = [];
+    this.score       = 0;
+    this.wave        = 0;
+    this.kills       = 0;
+    this.combo       = 1;
+    this.bestCombo   = 1;
+    this.lastHitTime = -999;
+    this._elapsedTime = 0;
+
+    // Return all active snowballs to pool
+    for (const sb of this.snowballs) {
+      sb.mesh.visible = false;
+      this._sbFreePool.push(sb);
+    }
+    this.snowballs = [];
 
     this.player.reset();
     this.enemySys.clear();
     this.powerUpSys.clear();
     this.particleSys.clear();
 
-    // Show HUD, hide menus
+    // Clear any wave messages
+    document.getElementById('waveMessage')?.classList.add('hidden');
+
+    // UI transitions
     document.getElementById('mainMenu').classList.add('hidden');
     document.getElementById('deathScreen').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
+    document.getElementById('lockHint')?.classList.remove('hidden');
 
     this.state = 'playing';
     this.clock.start();
 
-    // Kick off wave 1
     this.waveSys.startNextWave(this.wave);
     this._updateWaveHUD();
     this._updateScoreHUD();
+    this._updateEnemiesHUD();
+
+    document.getElementById('gameCanvas')?.requestPointerLock();
   }
 
   gameOver() {
     this.state = 'dead';
     this.clock.stop();
+    this._saveGame();
 
-    // Populate death screen stats
-    document.getElementById('finalScore').textContent = this.score;
+    document.getElementById('finalScore').textContent = this.score.toLocaleString();
     document.getElementById('finalWave').textContent  = this.wave;
     document.getElementById('finalKills').textContent = this.kills;
     document.getElementById('finalCombo').textContent = `x${this.bestCombo}`;
 
+    // Random encouraging message
+    const msg = DEATH_MESSAGES[Math.floor(Math.random() * DEATH_MESSAGES.length)];
+    const msgEl = document.getElementById('deathMessage');
+    if (msgEl) msgEl.textContent = msg;
+
+    // New high score indicator
+    const hsel = document.getElementById('newHighScore');
+    if (hsel) hsel.classList.toggle('hidden', this.score <= this._save.bestScore);
+
     document.getElementById('hud').classList.add('hidden');
+    document.getElementById('lockHint')?.classList.add('hidden');
+    document.getElementById('waveMessage')?.classList.add('hidden');
     document.getElementById('deathScreen').classList.remove('hidden');
+
+    if (document.pointerLockElement) document.exitPointerLock();
   }
 
   // ── Main Loop ──────────────────────────────────────────────
@@ -177,11 +258,9 @@ class Game {
   _startRenderLoop() {
     const loop = () => {
       requestAnimationFrame(loop);
-      this.deltaTime = Math.min(this.clock.getDelta(), 0.05); // cap at 50 ms
+      this.deltaTime = Math.min(this.clock.getDelta(), 0.05);
 
-      if (this.state === 'playing') {
-        this._update(this.deltaTime);
-      }
+      if (this.state === 'playing') this._update(this.deltaTime);
 
       this.renderer.render(this.scene, this.camera);
     };
@@ -189,164 +268,236 @@ class Game {
   }
 
   _update(dt) {
-    // Update player
+    this._elapsedTime += dt;
+
+    // 1. Player movement + input
     this.player.update(dt);
 
-    // Process throws queued by player
+    // 2. Screen shake (applied after player moves camera)
+    this._applyShake(dt);
+
+    // 3. Player throws → spawn snowballs
     for (const throwData of this.player.pendingThrows) {
       this._spawnSnowball(throwData, true);
     }
     this.player.pendingThrows = [];
 
-    // Update snowballs
+    // 4. Snowball physics + collision
     this._updateSnowballs(dt);
 
-    // Update enemies (they may also queue throws)
-    const enemyThrows = this.enemySys.update(dt, this.player.position);
-    for (const t of enemyThrows) {
-      this._spawnSnowball(t, false);
-    }
+    // 5. Ice crystal slow multiplier
+    const speedMult = this.player.activeEffects.slowEnemies ?? 1.0;
 
-    // Wave logic
+    // 6. Enemies move + fire back
+    const enemyThrows = this.enemySys.update(dt, this.player.position, speedMult);
+    for (const t of enemyThrows) this._spawnSnowball(t, false);
+
+    // 7. Wave completion check
     if (this.enemySys.isEmpty() && this.waveSys.isWaveComplete()) {
       this._handleWaveComplete();
     }
 
-    // Power-ups
-    this.powerUpSys.update(dt, this.player, this.powerups);
+    // 8. Power-ups
+    this.powerUpSys.update(dt, this.player);
 
-    // Particles
+    // 9. Particle effects
     this.particleSys.update(dt);
 
-    // Combo decay
-    this._updateCombo(dt);
+    // 10. Snowfall animation
+    this.mapSys.updateSnowfall(dt);
 
-    // Check player death
-    if (!this.player.isAlive) {
-      this.gameOver();
-    }
+    // 11. Combo decay (time-based)
+    this._updateComboDecay();
+
+    // 12. Enemies HUD
+    this._updateEnemiesHUD();
+
+    // 13. Player death check
+    if (!this.player.isAlive) this.gameOver();
   }
 
-  // ── Snowballs ──────────────────────────────────────────────
+  // ── Snowball Physics ───────────────────────────────────────
 
-  _spawnSnowball({ origin, direction, speed, radius }, fromPlayer) {
-    const geometry = new THREE.SphereGeometry(radius, 8, 8);
-    const material = new THREE.MeshLambertMaterial({
-      color: fromPlayer ? 0xffffff : 0xaaddff,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(origin);
-    mesh.castShadow = true;
-    this.scene.add(mesh);
+  _spawnSnowball({ origin, direction, speed, radius, damage, explosive }, fromPlayer) {
+    if (this._sbFreePool.length === 0) return;
 
-    this.snowballs.push({
-      mesh,
-      velocity: direction.clone().multiplyScalar(speed),
-      radius,
-      fromPlayer,
-      lifetime: CONFIG.physics.snowballLifetime,
-    });
+    const sb        = this._sbFreePool.pop();
+    sb.fromPlayer   = fromPlayer;
+    sb.radius       = radius;
+    sb.lifetime     = CONFIG.physics.snowballLifetime;
+    sb.damage       = damage ?? (fromPlayer ? CONFIG.player.baseDamage : 10);
+    sb.explosive    = explosive ?? false;
+
+    // Firecracker glow
+    sb.mesh.material = fromPlayer
+      ? (sb.explosive ? this._getFirecrackerMat() : this._sbMatPlayer)
+      : this._sbMatEnemy;
+
+    sb.mesh.scale.setScalar(radius);
+    sb.mesh.position.copy(origin);
+    sb.mesh.visible = true;
+    sb.velocity.copy(direction).multiplyScalar(speed);
+    this.snowballs.push(sb);
+  }
+
+  _getFirecrackerMat() {
+    if (!this._sbMatFirecracker) {
+      this._sbMatFirecracker = new THREE.MeshLambertMaterial({
+        color: 0xff8800, emissive: 0xff4400, emissiveIntensity: 0.6,
+      });
+    }
+    return this._sbMatFirecracker;
   }
 
   _updateSnowballs(dt) {
-    const gravity   = CONFIG.physics.gravity;
-    const arenaHalf = CONFIG.arena.size;
+    const gravity    = CONFIG.physics.gravity;
+    const arenaLimit = CONFIG.arena.size + 5;
 
     for (let i = this.snowballs.length - 1; i >= 0; i--) {
       const sb = this.snowballs[i];
       sb.lifetime -= dt;
 
-      // Apply gravity
       sb.velocity.y += gravity * dt;
       sb.mesh.position.addScaledVector(sb.velocity, dt);
 
-      // Hit ground
-      if (sb.mesh.position.y <= sb.radius) {
-        this._despawnSnowball(i);
-        continue;
-      }
-
-      // Out of arena bounds
       const p = sb.mesh.position;
-      if (Math.abs(p.x) > arenaHalf || Math.abs(p.z) > arenaHalf || sb.lifetime <= 0) {
+
+      // Hit ground
+      if (p.y <= sb.radius) {
+        const pos = p.clone();
+        const wasExplosive = sb.fromPlayer && sb.explosive;
+        this._despawnSnowball(i);
+        if (wasExplosive) this._explodeAt(pos);
+        else this.particleSys.burst(pos, 0xffffff, 6);
+        continue;
+      }
+
+      // Out of bounds / lifetime
+      if (Math.abs(p.x) > arenaLimit || Math.abs(p.z) > arenaLimit || sb.lifetime <= 0) {
         this._despawnSnowball(i);
         continue;
       }
 
-      // Collision — player hit by enemy snowball
+      // Enemy snowball hits player
       if (!sb.fromPlayer) {
-        const dist = p.distanceTo(this.player.position);
-        if (dist < sb.radius + CONFIG.player.radius) {
-          this.player.takeDamage(CONFIG.enemies.snowman.damage);
-          this.particleSys.burst(p, 0xaaddff, 8);
+        const d = p.distanceTo(this.player.position);
+        if (d < sb.radius + CONFIG.player.radius) {
+          this.player.takeDamage(sb.damage);
+          if (this.player.isAlive) {
+            this.particleSys.burst(p.clone(), 0xaaddff, 8);
+            this._triggerDamageFlash();
+            this._triggerShake(0.04, 0.25);
+            this.combo = 1;  // reset combo on getting hit
+          }
           this._despawnSnowball(i);
           continue;
         }
       }
 
-      // Collision — enemy hit by player snowball
+      // Player snowball hits enemy
       if (sb.fromPlayer) {
-        const hitEnemy = this.enemySys.checkHit(p, sb.radius);
-        if (hitEnemy) {
-          const died = hitEnemy.takeDamage(25);
-          this.particleSys.burst(p, 0xffffff, 12);
+        const hitResult = this.enemySys.checkHit(p, sb.radius);
+        if (hitResult) {
+          const { enemy, isHeadshot } = hitResult;
+          const dmg = isHeadshot
+            ? sb.damage * CONFIG.scoring.headshotMultiplier
+            : sb.damage;
+
+          const died = enemy.takeDamage(dmg);
+
+          // Particles
+          if (isHeadshot) {
+            this.particleSys.headshotBurst(p.clone());
+            this._showWaveMessage('HEADSHOT! ⭐', 'gold', 0.8);
+          } else {
+            this.particleSys.burst(p.clone(), 0xffffff, 12);
+          }
+
+          // Floating damage number
+          this._showFloatingDamage(p.clone(), dmg, isHeadshot);
+
+          const hitPos     = p.clone();
+          const wasExplosive = sb.explosive;
           this._despawnSnowball(i);
+          if (wasExplosive) this._explodeAt(hitPos);
+
+          // Update combo
+          this.lastHitTime = this._elapsedTime;
+          this.combo      = Math.min(this.combo + 1, CONFIG.scoring.comboMultMax);
+          this.bestCombo  = Math.max(this.bestCombo, this.combo);
+          this._showComboHUD();
+
           if (died) {
-            this._onEnemyKilled(hitEnemy);
+            this.particleSys.deathBurst(
+              enemy.mesh.position.clone().setY(enemy.cfg.size * 0.7),
+              enemy.cfg.color,
+            );
+            this._onEnemyKilled(enemy);
           }
           continue;
         }
+
       }
     }
   }
 
   _despawnSnowball(index) {
-    this.scene.remove(this.snowballs[index].mesh);
-    this.snowballs[index].mesh.geometry.dispose();
+    const sb = this.snowballs[index];
+    sb.mesh.visible    = false;
+    sb.mesh.material   = this._sbMatPlayer;  // reset material
+    this._sbFreePool.push(sb);
     this.snowballs.splice(index, 1);
   }
 
-  // ── Scoring & combos ───────────────────────────────────────
+  // ── Explosive AOE ─────────────────────────────────────────
+
+  _explodeAt(pos) {
+    const aoeDamage = 40;
+    const aoeRadius = 3;
+    const targets = this.enemySys.getEnemiesInRadius(pos, aoeRadius);
+    for (const enemy of targets) {
+      const died = enemy.takeDamage(aoeDamage);
+      if (died) {
+        this.particleSys.deathBurst(
+          enemy.mesh.position.clone().setY(enemy.cfg.size * 0.7),
+          enemy.cfg.color,
+        );
+        this._onEnemyKilled(enemy);
+      }
+    }
+    this.particleSys.burst(pos, 0xff8800, 30, { speed: 9, lifetime: 1.2, size: 0.1 });
+    this._triggerShake(0.06, 0.3);
+  }
+
+  // ── Scoring & Combos ───────────────────────────────────────
 
   _onEnemyKilled(enemy) {
     this.kills++;
-    // Combo
-    this.combo = Math.min(this.combo + 1, CONFIG.scoring.comboMultMax);
-    this.bestCombo = Math.max(this.bestCombo, this.combo);
-    this.comboTimer = CONFIG.scoring.comboWindow;
-
     const points = enemy.cfg.score * this.combo;
-    this.score += points;
+    this.score  += points;
     this._updateScoreHUD();
-    this._showComboHUD();
+    this._showScorePopup(`+${points}`);
 
-    // Chance to spawn power-up
     if (Math.random() < CONFIG.powerups.spawnChance) {
       this.powerUpSys.spawn(enemy.mesh.position.clone());
     }
   }
 
-  _updateCombo(dt) {
-    if (this.comboTimer > 0) {
-      this.comboTimer -= dt;
-      if (this.comboTimer <= 0) {
-        this.combo = 1;
-        this._hideComboHUD();
-      }
+  _updateComboDecay() {
+    const timeSinceHit = this._elapsedTime - this.lastHitTime;
+    if (this.combo > 1 && timeSinceHit > CONFIG.scoring.comboWindow) {
+      this.combo = 1;
+      document.getElementById('comboDisplay')?.classList.add('hidden');
     }
   }
 
   _showComboHUD() {
     if (this.combo < 2) return;
-    const el = document.getElementById('comboDisplay');
+    const el  = document.getElementById('comboDisplay');
     const txt = document.getElementById('comboText');
     if (!el || !txt) return;
     txt.textContent = `x${this.combo} COMBO`;
     el.classList.remove('hidden');
-  }
-
-  _hideComboHUD() {
-    document.getElementById('comboDisplay')?.classList.add('hidden');
   }
 
   _updateScoreHUD() {
@@ -359,44 +510,179 @@ class Game {
     if (el) el.textContent = this.wave + 1;
   }
 
-  // ── Wave management ────────────────────────────────────────
+  _updateEnemiesHUD() {
+    const el = document.getElementById('enemiesCount');
+    if (el) el.textContent = this.waveSys.remainingCount;
+  }
+
+  // ── Wave Management ────────────────────────────────────────
 
   _handleWaveComplete() {
-    this.score += CONFIG.scoring.waveBonus;
+    const bonus = CONFIG.scoring.waveBonus * (this.wave + 1);
+    this.score += bonus;
     this._updateScoreHUD();
+
+    // Full heal on wave clear
+    this.player.heal(100);
+
+    this._showWaveMessage(
+      `✅ WAVE ${this.wave + 1} CLEAR!\n+${bonus.toLocaleString()} pts`,
+      'green',
+      CONFIG.waves.clearDisplayDuration,
+    );
 
     this.wave++;
     this._updateWaveHUD();
 
-    // Brief intermission then next wave
+    const nextDelay = CONFIG.waves.clearDisplayDuration * 1000;
+    const announceDelay = nextDelay + 500;
+    const spawnDelay    = announceDelay + CONFIG.waves.nextDisplayDuration * 1000;
+
     setTimeout(() => {
-      if (this.state === 'playing') {
-        this.waveSys.startNextWave(this.wave);
-      }
-    }, CONFIG.waves.intermissionDuration * 1000);
+      if (this.state !== 'playing') return;
+      this._showWaveMessage(`WAVE ${this.wave + 1}`, 'accent', CONFIG.waves.nextDisplayDuration);
+    }, announceDelay);
+
+    setTimeout(() => {
+      if (this.state !== 'playing') return;
+      document.getElementById('waveMessage')?.classList.add('hidden');
+      this.waveSys.startNextWave(this.wave);
+      this._updateEnemiesHUD();
+    }, spawnDelay);
   }
 
-  // ── UI bindings ────────────────────────────────────────────
+  _showWaveMessage(text, colorClass, duration) {
+    const el = document.getElementById('waveMessage');
+    if (!el) return;
+
+    el.textContent   = text;
+    el.className     = `wave-msg wave-msg-${colorClass}`;
+    clearTimeout(this._waveMsgTimer);
+
+    if (duration > 0) {
+      this._waveMsgTimer = setTimeout(() => {
+        el.classList.add('wave-msg-fade');
+        setTimeout(() => el.classList.add('hidden'), 400);
+      }, duration * 1000 - 400);
+    }
+  }
+
+  // ── Screen Effects ─────────────────────────────────────────
+
+  _triggerDamageFlash() {
+    const el = document.getElementById('damageFlash');
+    if (!el) return;
+    el.classList.remove('flash-active');
+    void el.offsetWidth;  // reflow to restart animation
+    el.classList.add('flash-active');
+  }
+
+  _triggerShake(amount, duration) {
+    if (amount > this._shake.amount || this._shake.timer >= this._shake.duration) {
+      this._shake.amount   = amount;
+      this._shake.duration = duration;
+      this._shake.timer    = 0;
+    }
+  }
+
+  _applyShake(dt) {
+    if (this._shake.timer >= this._shake.duration) return;
+    this._shake.timer += dt;
+    const t = 1 - this._shake.timer / this._shake.duration;
+    const s = this._shake.amount * t;
+    this.camera.position.x += (Math.random() - 0.5) * 2 * s;
+    this.camera.position.y += (Math.random() - 0.5) * 2 * s;
+  }
+
+  // ── Floating Damage Numbers ────────────────────────────────
+
+  _showFloatingDamage(worldPos, damage, isHeadshot) {
+    // Project 3D position to 2D screen
+    const vec = worldPos.clone();
+    vec.project(this.camera);
+
+    const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-vec.y * 0.5 + 0.5) * window.innerHeight;
+
+    // Skip if behind camera
+    if (vec.z > 1) return;
+
+    const el = document.createElement('div');
+    el.className = 'floating-damage' + (isHeadshot ? ' headshot' : '');
+    el.textContent = isHeadshot ? `⭐ ${damage}` : damage;
+    el.style.left = `${x}px`;
+    el.style.top  = `${y}px`;
+    document.body.appendChild(el);
+
+    setTimeout(() => el.remove(), 900);
+  }
+
+  _showScorePopup(text) {
+    const el = document.getElementById('scorePopup');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('score-pop');
+    void el.offsetWidth;
+    el.classList.add('score-pop');
+  }
+
+  // ── Save System ────────────────────────────────────────────
+
+  _loadSave() {
+    try {
+      const raw = localStorage.getItem('snowball-fight-save');
+      if (raw) this._save = { ...this._save, ...JSON.parse(raw) };
+    } catch (e) { /* ignore */ }
+    this._updateMenuBestScore();
+  }
+
+  _saveGame() {
+    const prev = this._save;
+    const updated = {
+      bestScore:   Math.max(this.score, prev.bestScore),
+      bestWave:    Math.max(this.wave,  prev.bestWave),
+      totalKills:  prev.totalKills + this.kills,
+      totalGames:  prev.totalGames + 1,
+    };
+    try {
+      localStorage.setItem('snowball-fight-save', JSON.stringify(updated));
+    } catch (e) { /* ignore */ }
+    const isNewBest = updated.bestScore > prev.bestScore;
+    this._save = updated;
+    this._updateMenuBestScore();
+    return isNewBest;
+  }
+
+  _updateMenuBestScore() {
+    const el = document.getElementById('bestScore');
+    if (el && this._save.bestScore > 0) {
+      el.textContent = `Best: ${this._save.bestScore.toLocaleString()}`;
+      el.classList.remove('hidden');
+    }
+  }
+
+  // ── UI Bindings ────────────────────────────────────────────
 
   _bindUI() {
-    document.getElementById('startBtn')?.addEventListener('click', () => this.startGame());
+    document.getElementById('startBtn')?.addEventListener('click',   () => this.startGame());
     document.getElementById('restartBtn')?.addEventListener('click', () => this.startGame());
     document.getElementById('menuBtn')?.addEventListener('click', () => {
       this.state = 'menu';
+      if (document.pointerLockElement) document.exitPointerLock();
       document.getElementById('deathScreen').classList.add('hidden');
       document.getElementById('hud').classList.add('hidden');
+      document.getElementById('lockHint')?.classList.add('hidden');
+      document.getElementById('waveMessage')?.classList.add('hidden');
       document.getElementById('mainMenu').classList.remove('hidden');
+      this._updateMenuBestScore();
     });
     document.getElementById('howToBtn')?.addEventListener('click', () => {
-      const panel = document.getElementById('howToPanel');
-      panel?.classList.toggle('hidden');
+      document.getElementById('howToPanel')?.classList.toggle('hidden');
     });
   }
 }
 
-// Singleton game instance.
-// Module scripts are deferred and run AFTER DOMContentLoaded, so we can
-// call init() directly — the DOM is already ready at this point.
+// Instantiate and boot
 const game = new Game();
 game.init();
 
