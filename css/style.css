@@ -903,7 +903,8 @@ ul { list-style: none; }
 #mobileControls {
   position: fixed; inset: 0;
   z-index: 6;
-  pointer-events: none;
+  pointer-events: all;
+  touch-action: none;
 }
 
 #joystickBase {

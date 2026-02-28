@@ -130,6 +130,9 @@ export class Player {
     tb.addEventListener('touchend', (e) => {
       e.preventDefault(); e.stopPropagation(); this._throwBtnHeld = false;
     }, { passive: false });
+    tb.addEventListener('touchcancel', (e) => {
+      e.preventDefault(); e.stopPropagation(); this._throwBtnHeld = false;
+    }, { passive: false });
   }
 
   _onMobileTouchStart(e) {
