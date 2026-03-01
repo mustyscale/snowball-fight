@@ -133,103 +133,133 @@ ul { list-style: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 22, 40, 0.92);
+  overflow-y: auto;
+  padding: 1rem 0;
+  background: radial-gradient(ellipse 900px 600px at 50% 0%, rgba(56,189,248,0.07) 0%, transparent 65%),
+              rgba(10, 22, 40, 0.96);
   animation: fadeIn 0.4s ease;
 }
 
-/* Subtle radial gradient spotlight */
-#mainMenu::before {
-  content: '';
-  position: absolute;
-  top: -20%; left: 50%;
-  transform: translateX(-50%);
-  width: 600px; height: 600px;
-  background: radial-gradient(circle, rgba(56,189,248,0.08) 0%, transparent 70%);
-  pointer-events: none;
-}
-
 .menu-container {
-  composes: card;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
 
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
-  padding: 2.5rem 2rem;
-  max-width: 400px;
-  width: 90%;
+  gap: 0.9rem;
+  padding: 0 2rem 2rem;      /* no top padding — brand bar sits flush */
+  max-width: 440px;
+  width: 92%;
   position: relative;
   animation: slideUp 0.35s ease;
 
-  /* Top edge glow */
   box-shadow:
     0 0 0 1px var(--border),
-    0 0 60px rgba(56,189,248,0.06),
-    0 32px 64px rgba(0,0,0,0.5);
+    0 0 80px rgba(56,189,248,0.07),
+    0 40px 80px rgba(0,0,0,0.55);
 }
 
-/* Accent top border line */
-.menu-container::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 10%; right: 10%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  border-radius: 99px;
-}
-
-/* Logo / branding row */
-.menu-logo {
+/* ── sb.fun brand bar ─────────────────────────────────────── */
+.sbfun-bar {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.25rem;
+  gap: 0.45rem;
+  width: calc(100% + 4rem);   /* bleed to card edges */
+  margin: 0 -2rem;
+  padding: 0.6rem 1.6rem;
+  background: linear-gradient(90deg,
+    rgba(56,189,248,0.10) 0%,
+    rgba(56,189,248,0.04) 50%,
+    rgba(56,189,248,0.10) 100%);
+  border-bottom: 1px solid rgba(56,189,248,0.14);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  text-decoration: none;
+  transition: background var(--transition);
+  cursor: pointer;
+}
+.sbfun-bar:hover {
+  background: linear-gradient(90deg,
+    rgba(56,189,248,0.17) 0%,
+    rgba(56,189,248,0.08) 50%,
+    rgba(56,189,248,0.17) 100%);
+}
+.sbfun-flake {
+  width: 14px; height: 14px;
+  color: var(--accent);
+  flex-shrink: 0;
+  animation: spinSlow 8s linear infinite;
+}
+@keyframes spinSlow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.sbfun-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+.sbfun-sep {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.sbfun-token {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+.sbfun-arrow {
+  width: 10px; height: 10px;
+  color: var(--text-dim);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
-.menu-logo-icon {
+/* ── Game title ───────────────────────────────────────────── */
+.menu-logo {
+  margin-top: 0.4rem;
+}
+.game-title {
   font-size: 2rem;
+  font-weight: 900;
+  color: var(--text);
+  letter-spacing: -0.03em;
+  text-align: center;
   line-height: 1;
 }
+.game-title span { color: var(--accent); }
 
-.game-title {
-  font-size: 1.7rem;
-  font-weight: 800;
-  color: var(--text);
-  letter-spacing: -0.02em;
-}
-
-.game-title span {
-  color: var(--accent);
-}
-
-.game-subtitle {
+/* ── Tagline ──────────────────────────────────────────────── */
+.game-tagline {
   font-size: 0.82rem;
+  font-style: italic;
   color: var(--text-muted);
-  margin-bottom: 0.5rem;
-  font-weight: 500;
+  text-align: center;
+  line-height: 1.55;
   letter-spacing: 0.01em;
+  margin-top: -0.2rem;
 }
 
-/* Live indicator pill (decorative, sb.fun inspired) */
+/* ── Live badge ───────────────────────────────────────────── */
 .live-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 0.65rem;
-  background: rgba(34, 197, 94, 0.12);
-  border: 1px solid rgba(34, 197, 94, 0.25);
+  padding: 0.22rem 0.65rem;
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.22);
   border-radius: 99px;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
   color: var(--green);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
-
 .live-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
@@ -237,12 +267,134 @@ ul { list-style: none; }
   animation: pulseDot 1.5s ease infinite;
 }
 
-/* Menu button group */
+/* ── Buttons ──────────────────────────────────────────────── */
 .menu-buttons {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.55rem;
   width: 100%;
+}
+.btn-snowball {
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.8rem 1.75rem;
+  letter-spacing: 0.01em;
+  gap: 0.5rem;
+}
+.menu-row {
+  display: flex;
+  gap: 0.55rem;
+  width: 100%;
+}
+.btn-half {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  padding: 0.6rem 0.75rem;
+}
+
+/* ── Divider ──────────────────────────────────────────────── */
+.menu-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+  margin: 0.1rem 0;
+}
+
+/* ── Contract address ─────────────────────────────────────── */
+.ca-section {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.75rem;
+}
+.ca-label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.ca-address {
+  flex: 1;
+  font-size: 0.72rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+.ca-copy-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: 1px solid rgba(56,189,248,0.25);
+  border-radius: 5px;
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 0.67rem;
+  font-weight: 600;
+  padding: 0.22rem 0.5rem;
+  cursor: pointer;
+  transition: all var(--transition);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ca-copy-btn svg {
+  width: 12px; height: 12px;
+  flex-shrink: 0;
+}
+.ca-copy-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+.ca-copy-btn.copied {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+/* ── Social links ─────────────────────────────────────────── */
+.social-links {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all var(--transition);
+  letter-spacing: 0.01em;
+}
+.social-link svg {
+  width: 14px; height: 14px;
+  flex-shrink: 0;
+}
+.social-link:hover {
+  background: rgba(56,189,248,0.08);
+  border-color: rgba(56,189,248,0.3);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+.social-link-web:hover {
+  color: var(--text);
 }
 
 /* How-to panel */
@@ -707,9 +859,6 @@ ul { list-style: none; }
 }
 
 /* Score popup "+N" animation */
-#scoreDisplay {
-  position: relative;
-}
 .score-popup {
   position: absolute;
   top: -1.2rem;
@@ -728,10 +877,10 @@ ul { list-style: none; }
   100% { opacity: 0; transform: translateY(-24px); }
 }
 
-/* Active power-ups panel — bottom left */
+/* Active power-ups panel — bottom left (above dodge ring) */
 #activePowers {
   position: absolute;
-  bottom: 1.5rem; left: 1rem;
+  bottom: 5.0rem; left: 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -938,13 +1087,32 @@ ul { list-style: none; }
 }
 #throwBtn:active { background: rgba(56,189,248,0.4); transform: scale(0.93); }
 
+#jumpBtn {
+  position: absolute; bottom: 205px; right: 30px;
+  width: 70px; height: 70px; border-radius: 50%;
+  background: rgba(255,255,255,0.10);
+  border: 2px solid rgba(255,255,255,0.28);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem; font-weight: 700; color: rgba(255,255,255,0.85);
+  pointer-events: all; touch-action: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s, transform 0.1s;
+}
+#jumpBtn:active { background: rgba(255,255,255,0.22); transform: scale(0.93); }
+
 /* Responsive HUD repositioning for touch screens */
 @media (pointer: coarse) {
-  #scoreDisplay { top: 1rem; right: 1rem; bottom: auto; }
-  #activePowers { bottom: 9rem; }
-  #comboDisplay { bottom: 9rem; }
-  #throwCooldown { bottom: 9rem; }
+  /* Raise HUD elements above the joystick area (joystick top ≈ 220px) */
+  #activePowers { bottom: 15rem; }
+  #comboDisplay { bottom: 15rem; }
+  #throwCooldown { bottom: 15rem; }
+  /* Hide desktop-only elements */
+  #dodgeIndicator { display: none !important; }
+  #chargeBar { display: none !important; }
   #lockHint { display: none !important; }
+  /* Compact menu card gaps on small phones */
+  .menu-container { gap: 0.65rem; padding: 0 1.5rem 1.5rem; }
+  .sbfun-bar { width: calc(100% + 3rem); margin: 0 -1.5rem; }
 }
 
 /* ============================================================
@@ -1172,4 +1340,122 @@ ul { list-style: none; }
   font-size: 0.85rem;
   padding: 2rem 1rem;
   line-height: 1.6;
+}
+
+/* ============================================================
+   Gameplay Mechanics HUD
+   ============================================================ */
+
+/* ── Charge bar (above cooldown ring, center-bottom) ─────── */
+#chargeBar {
+  position: absolute;
+  bottom: 5.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80px;
+  height: 6px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.15);
+  pointer-events: none;
+}
+#chargeFill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), #ffd700);
+  transition: background 0.1s;
+}
+
+/* ── Dodge indicator (bottom left, above activePowers) ───── */
+#dodgeIndicator {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 1rem;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  /* push activePowers above it — see activePowers margin-bottom */
+}
+.dodge-ring {
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  transform: rotate(-90deg);
+}
+.dodge-ring-bg {
+  fill: none;
+  stroke: rgba(255,255,255,0.12);
+  stroke-width: 3;
+}
+.dodge-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: 94.25;   /* 2πr ≈ 94.25 for r=15 */
+  stroke-dashoffset: 0;       /* 0 = full circle (ready) */
+  stroke-linecap: round;
+  transition: stroke 0.2s;
+}
+.dodge-ring-fill.recharging {
+  stroke: rgba(255,255,255,0.35);
+}
+.dodge-label {
+  position: relative;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+/* ── Streak counter (below score display, top right) ──────── */
+#streakCounter {
+  position: absolute;
+  top: 3.8rem;
+  right: 1.5rem;
+  background: rgba(255,100,0,0.18);
+  border: 1px solid rgba(255,140,0,0.35);
+  border-radius: 20px;
+  padding: 0.25rem 0.65rem;
+  pointer-events: none;
+  animation: streakPulse 0.8s ease-in-out infinite alternate;
+}
+#streakText {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #ffb347;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+@keyframes streakPulse {
+  from { box-shadow: 0 0 4px rgba(255,120,0,0.3); }
+  to   { box-shadow: 0 0 12px rgba(255,120,0,0.7); }
+}
+
+/* ── Ice zone indicator (center, below wave info) ─────────── */
+#iceIndicator {
+  position: absolute;
+  top: 3.8rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(56,189,248,0.14);
+  border: 1px solid rgba(56,189,248,0.35);
+  border-radius: 20px;
+  padding: 0.22rem 0.65rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+  animation: icePulse 1.5s ease-in-out infinite alternate;
+}
+@keyframes icePulse {
+  from { opacity: 0.7; }
+  to   { opacity: 1; }
 }

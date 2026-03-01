@@ -574,9 +574,15 @@ export class Enemy {
     const dz   = playerPos.z - this.mesh.position.z;
     const dist = Math.sqrt(dx * dx + dz * dz);
 
+    // Ice zone: enemies attack slower when standing on the frozen fountain
+    const ex = this.mesh.position.x, ez = this.mesh.position.z;
+    const iceR = CONFIG.iceZone.radius;
+    const onIce = ex * ex + ez * ez < iceR * iceR;
+    const attackDt = onIce ? dt * CONFIG.iceZone.enemySlowMult : dt;
+
     // Sniper charging state
     if (this.type === 'sniper' && this.state === 'charging') {
-      this._chargeTimer -= dt;
+      this._chargeTimer -= attackDt;
       this._updateLaser(playerPos);
       if (this._chargeTimer <= 0) {
         if (this._laserLine) this._laserLine.visible = false;
@@ -586,14 +592,15 @@ export class Enemy {
       return [];
     }
 
-    // Normal attack state: countdown then throw
+    // Normal attack state: stay in attack while in range, respecting throwRate
     if (this.state === 'attack') {
-      this.throwTimer -= dt;
+      this.throwTimer -= attackDt;
       if (this.throwTimer <= 0) {
         this.throwTimer = this.cfg.throwRate;
-        this.state      = 'chase';
         return this._buildThrowData(playerPos);
       }
+      // Only leave attack state if player moves out of range
+      if (dist > this.cfg.range) this.state = 'chase';
       return [];
     }
 
@@ -606,7 +613,8 @@ export class Enemy {
         this._chargeTimer = this.cfg.chargeTime;
       } else {
         this.state      = 'attack';
-        this.throwTimer = 0;
+        // Short initial delay before first shot (feels more fair on entering range)
+        this.throwTimer = this.cfg.throwRate * 0.4;
       }
     }
 
@@ -734,15 +742,25 @@ export class Enemy {
       this.mesh.position.z,
     );
 
-    const speed  = CONFIG.physics.snowballSpeed * 0.75;
+    // Sniper fires faster for a laser-like feel; others use standard speed
+    const speed  = this.type === 'sniper'
+      ? CONFIG.physics.snowballSpeed * 3.0   // 60 m/s — sniper precision shot
+      : CONFIG.physics.snowballSpeed * 0.75; // 15 m/s — normal lob
     const radius = CONFIG.physics.snowballRadius;
+
+    // Physics-correct arc compensation: raise aim to counteract gravity drop
+    // yComp = ½|g|·(hdist/v)²  — exact low-arc ballistic offset
+    const hdx   = playerPos.x - headWorld.x;
+    const hdz   = playerPos.z - headWorld.z;
+    const hdist = Math.sqrt(hdx * hdx + hdz * hdz);
+    const yComp = 4.9 * Math.pow(hdist / speed, 2);
 
     // Chonky 3-spread
     if (this.type === 'chonky') {
       return [-0.18, 0, 0.18].map(yawOff => {
         const baseDir = new THREE.Vector3(
           playerPos.x - headWorld.x,
-          playerPos.y - headWorld.y + 0.5,
+          playerPos.y - headWorld.y + yComp,
           playerPos.z - headWorld.z,
         ).normalize();
         const cos = Math.cos(yawOff), sin = Math.sin(yawOff);
@@ -757,7 +775,7 @@ export class Enemy {
 
     const dir = new THREE.Vector3(
       playerPos.x - headWorld.x,
-      playerPos.y - headWorld.y + 0.5,
+      playerPos.y - headWorld.y + yComp,
       playerPos.z - headWorld.z,
     ).normalize();
 

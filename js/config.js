@@ -19,6 +19,8 @@ export const CONFIG = {
     snowballSpeed:    20,    // throw velocity (m/s)
     snowballRadius:   0.15,  // collision sphere radius (m)
     snowballLifetime: 5,     // seconds before auto-despawn
+    jumpVelocity:     8.5,   // initial upward speed when jumping (m/s)
+    jumpGravity:      22,    // jump-specific gravity — tighter arc
   },
 
   // ── Player ─────────────────────────────────────────────────
@@ -34,6 +36,10 @@ export const CONFIG = {
     regenDelay:       5,     // seconds of no-damage before regen kicks in
     regenRate:        10,    // HP regenerated per second
     baseDamage:       50,    // base hit damage (headshot = ×2)
+    dodgeDistance:    3.0,   // Q-dash distance (m)
+    dodgeDuration:    0.2,   // dash duration (s) — also i-frame window
+    dodgeCooldown:    2.2,   // seconds before next dodge available
+    chargeMaxTime:    1.8,   // hold LMB this long for full charge
   },
 
   // ── Enemy types ────────────────────────────────────────────
@@ -227,6 +233,39 @@ export const CONFIG = {
     comboMultMax:       8,
     waveBonus:          1000, // base bonus per wave cleared (× wave number)
     headshotMultiplier: 2,    // headshot damage multiplier
+  },
+
+  // ── Ice Zone ───────────────────────────────────────────────
+  iceZone: {
+    radius:        4.2,   // metres from origin (fountain)
+    enemySlowMult: 0.55,  // enemies' attack timers run slower on ice
+  },
+
+  // ── Elevated Platforms ─────────────────────────────────────
+  platforms: [
+    { x:  9, z:  9, y: 1.2, w: 4.0, d: 4.0 },
+    { x: -9, z:  9, y: 1.2, w: 4.0, d: 4.0 },
+    { x:  9, z: -9, y: 1.2, w: 4.0, d: 4.0 },
+  ],
+
+  // ── Power Pedestals ────────────────────────────────────────
+  pedestals: {
+    respawnTime: 45,   // seconds between power-up drops
+    positions: [
+      { x:  13, z:  0 },
+      { x: -13, z:  0 },
+      { x:   0, z:  13 },
+    ],
+  },
+
+  // ── Kill Streaks ───────────────────────────────────────────
+  streaks: {
+    window: 6,   // seconds between kills to maintain streak
+    thresholds: [
+      { kills: 3, type: 'speed',      duration: 5, speedMult:  1.5 },
+      { kills: 5, type: 'damage',     duration: 8, damageMult: 2.0, healAmount: 30 },
+      { kills: 7, type: 'invincible', duration: 6 },
+    ],
   },
 
   // ── Rendering ──────────────────────────────────────────────

@@ -43,6 +43,10 @@ export class GameMap {
     this.scene   = scene;
     this.objects = [];     // every object added, for cleanup
     this.snowfall = null;  // THREE.Points — updated each frame by Game
+
+    // Exported for game physics
+    this.platforms = [];   // { x, z, y (top surface), w, d }
+    this.pedestals = [];   // { x, z, glowMesh }
   }
 
   // ── Build ──────────────────────────────────────────────────
@@ -55,6 +59,8 @@ export class GameMap {
     this._buildCabins();
     this._buildTrees();
     this._buildBarricades();
+    this._buildPlatforms();
+    this._buildPedestals();
     this._buildSnowfall();
   }
 
@@ -136,6 +142,18 @@ export class GameMap {
     spikeMesh.position.set(0, 1.0, 0);
     spikeMesh.castShadow = true;
     this._add(spikeMesh);
+
+    // Ice zone ring (visual indicator of slippery area radius 4.2 m)
+    const ringGeo = new THREE.RingGeometry(4.0, 4.2, 32);
+    const ringMat = new THREE.MeshLambertMaterial({
+      color: 0xC8E6F5, emissive: new THREE.Color(0x80D0F0),
+      emissiveIntensity: 0.4, transparent: true, opacity: 0.55,
+      side: THREE.DoubleSide,
+    });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.position.y = 0.01;
+    this._add(ringMesh);
 
     // Ethereal glow light above fountain
     const glow = new THREE.PointLight(0xE0F7FF, 0.5, 5);
@@ -334,6 +352,90 @@ export class GameMap {
       group.position.set(x, 0, z);
       group.rotation.y = ry;
       this._add(group);
+    }
+  }
+
+  // ── Elevated Platforms ─────────────────────────────────────
+
+  _buildPlatforms() {
+    const defs = CONFIG.platforms;
+    const woodMat = MAT.wood();
+    const snowMat = MAT.snow();
+
+    for (const p of defs) {
+      const group = new THREE.Group();
+
+      // Planked surface
+      const surfGeo  = new THREE.BoxGeometry(p.w, 0.22, p.d);
+      const surfMesh = new THREE.Mesh(surfGeo, woodMat);
+      surfMesh.position.y = p.y - 0.11;
+      surfMesh.castShadow    = true;
+      surfMesh.receiveShadow = true;
+      group.add(surfMesh);
+
+      // Snow drift on top
+      const snowGeo  = new THREE.BoxGeometry(p.w, 0.08, p.d);
+      const snowMesh = new THREE.Mesh(snowGeo, snowMat);
+      snowMesh.position.y = p.y + 0.04;
+      group.add(snowMesh);
+
+      // Support posts (2 per platform)
+      const postMat = MAT.trunkBark();
+      for (const xOff of [-p.w * 0.3, p.w * 0.3]) {
+        const postGeo  = new THREE.CylinderGeometry(0.08, 0.10, p.y - 0.11, 8);
+        const postMesh = new THREE.Mesh(postGeo, postMat);
+        postMesh.position.set(xOff, (p.y - 0.11) / 2, 0);
+        postMesh.castShadow = true;
+        group.add(postMesh);
+      }
+
+      group.position.set(p.x, 0, p.z);
+      this._add(group);
+
+      // Export AABB for player physics (use config values directly)
+      this.platforms.push({ x: p.x, z: p.z, y: p.y, w: p.w, d: p.d });
+    }
+  }
+
+  // ── Power Pedestals ────────────────────────────────────────
+
+  _buildPedestals() {
+    const stoneMat = MAT.stone();
+
+    for (const pos of CONFIG.pedestals.positions) {
+      const group = new THREE.Group();
+
+      // Stone column
+      const colGeo  = new THREE.CylinderGeometry(0.28, 0.34, 1.6, 10);
+      const colMesh = new THREE.Mesh(colGeo, stoneMat);
+      colMesh.position.y = 0.8;
+      colMesh.castShadow    = true;
+      colMesh.receiveShadow = true;
+      group.add(colMesh);
+
+      // Capital (top block)
+      const capGeo  = new THREE.BoxGeometry(0.7, 0.18, 0.7);
+      const capMesh = new THREE.Mesh(capGeo, stoneMat);
+      capMesh.position.y = 1.69;
+      capMesh.castShadow = true;
+      group.add(capMesh);
+
+      // Glowing crystal on top
+      const crystalMat = new THREE.MeshLambertMaterial({
+        color: 0x80D0FF, emissive: new THREE.Color(0x38BDF8),
+        emissiveIntensity: 0.3, transparent: true, opacity: 0.85,
+      });
+      const crystalGeo  = new THREE.OctahedronGeometry(0.22, 0);
+      const crystalMesh = new THREE.Mesh(crystalGeo, crystalMat);
+      crystalMesh.position.y = 2.0;
+      crystalMesh.rotation.y = Math.random() * Math.PI;
+      group.add(crystalMesh);
+
+      group.position.set(pos.x, 0, pos.z);
+      this._add(group);
+
+      // Export for game.js timers
+      this.pedestals.push({ x: pos.x, z: pos.z, glowMesh: crystalMesh, glowMat: crystalMat });
     }
   }
 

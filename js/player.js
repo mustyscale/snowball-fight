@@ -45,6 +45,33 @@ export class Player {
     this.keys      = {};
     this.wantThrow = false;
 
+    // ── Jump physics ──────────────────────────────────────
+    this.feetY      = 0;        // feet altitude (0 = ground)
+    this._velY      = 0;        // vertical velocity (m/s)
+    this._grounded  = true;
+    this._wantJump  = false;
+    this._platforms = [];       // set by game.js after map builds
+
+    // ── Ice zone sliding ──────────────────────────────────
+    this._slideVX = 0;          // horizontal slide velocity X
+    this._slideVZ = 0;          // horizontal slide velocity Z
+    this.onIce    = false;      // exposed for HUD
+
+    // ── Dodge roll ────────────────────────────────────────
+    this._dodging      = false;
+    this._dodgeTimer   = 0;
+    this._dodgeCooldown = 0;
+    this._dodgeDirX    = 0;
+    this._dodgeDirZ    = 0;
+
+    // ── Charged throw ─────────────────────────────────────
+    this._mouseHeld          = false;
+    this._chargeTime         = 0;
+    this._pendingChargeLevel = 0;
+
+    // ── External boosts (set by game.js streak system) ────
+    this.damageBoost = 1.0;
+
     // ── Power-up active effects ───────────────────────────
     this.activeEffects = {};
 
@@ -74,10 +101,15 @@ export class Player {
     window.addEventListener('keydown', (e) => {
       this.keys[e.code] = true;
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.isSprinting = true;
+      if (e.code === 'Space') { e.preventDefault(); this._wantJump = true; }
+      if (e.code === 'KeyQ' && !this._dodging && this._dodgeCooldown <= 0 && this._grounded) {
+        this._startDodge();
+      }
     });
     window.addEventListener('keyup', (e) => {
       this.keys[e.code] = false;
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.isSprinting = false;
+      if (e.code === 'Space') this._wantJump = false;
     });
 
     if (!IS_MOBILE) {
@@ -92,9 +124,22 @@ export class Player {
         );
       });
 
-      // Left-click throw (only when locked)
+      // Charged throw: hold to charge, release to fire
       window.addEventListener('mousedown', (e) => {
-        if (e.button === 0 && this.isLocked) this.wantThrow = true;
+        if (e.button === 0 && this.isLocked) {
+          this._mouseHeld  = true;
+          this._chargeTime = 0;
+        }
+      });
+      window.addEventListener('mouseup', (e) => {
+        if (e.button === 0 && this._mouseHeld) {
+          this._mouseHeld = false;
+          if (this.throwTimer <= 0) {
+            this._pendingChargeLevel = Math.min(this._chargeTime / this.cfg.chargeMaxTime, 1);
+            this.wantThrow = true;
+          }
+          this._chargeTime = 0;
+        }
       });
 
       // Pointer lock — request on canvas click
@@ -112,6 +157,24 @@ export class Player {
     }
 
     if (IS_MOBILE) this._bindMobileInputs();
+  }
+
+  // ── Dodge roll ─────────────────────────────────────────────
+
+  _startDodge() {
+    const dir = new THREE.Vector3();
+    if (this.keys['KeyW']) dir.z -= 1;
+    if (this.keys['KeyS']) dir.z += 1;
+    if (this.keys['KeyA']) dir.x -= 1;
+    if (this.keys['KeyD']) dir.x += 1;
+    if (dir.lengthSq() === 0) dir.z = -1;  // default: forward
+    dir.normalize().applyEuler(new THREE.Euler(0, this.yaw, 0));
+
+    this._dodging       = true;
+    this._dodgeTimer    = this.cfg.dodgeDuration;
+    this._dodgeCooldown = this.cfg.dodgeCooldown;
+    this._dodgeDirX     = dir.x;
+    this._dodgeDirZ     = dir.z;
   }
 
   // ── Mobile input bindings ──────────────────────────────────
@@ -133,6 +196,19 @@ export class Player {
     tb.addEventListener('touchcancel', (e) => {
       e.preventDefault(); e.stopPropagation(); this._throwBtnHeld = false;
     }, { passive: false });
+
+    const jb = document.getElementById('jumpBtn');
+    if (jb) {
+      jb.addEventListener('touchstart', (e) => {
+        e.preventDefault(); e.stopPropagation(); this._wantJump = true;
+      }, { passive: false });
+      jb.addEventListener('touchend', (e) => {
+        e.preventDefault(); e.stopPropagation(); this._wantJump = false;
+      }, { passive: false });
+      jb.addEventListener('touchcancel', (e) => {
+        e.preventDefault(); e.stopPropagation(); this._wantJump = false;
+      }, { passive: false });
+    }
   }
 
   _onMobileTouchStart(e) {
@@ -217,19 +293,34 @@ export class Player {
   update(dt) {
     if (!this.isAlive) return;
 
+    // Dodge cooldown ticker
+    if (this._dodgeCooldown > 0) this._dodgeCooldown -= dt;
+
     this._updateMovement(dt);
     this._updateCamera();
     this._updateThrowCooldown(dt);
     this._updateRegen(dt);
 
-    if (this._throwBtnHeld) this.wantThrow = true;
+    // Charge accumulation (desktop only, after throw timer expires)
+    if (this._mouseHeld && this.throwTimer <= 0) {
+      this._chargeTime = Math.min(this._chargeTime + dt, this.cfg.chargeMaxTime);
+    }
+
+    // Mobile throw button (instant throw, no charge)
+    if (this._throwBtnHeld) {
+      this.wantThrow = true;
+      this._pendingChargeLevel = 0;
+    }
 
     if (this.wantThrow && this.throwTimer <= 0) {
-      this._doThrow();
+      this._doThrow(this._pendingChargeLevel ?? 0);
       const cooldown = this.cfg.throwCooldown * (this.activeEffects.throwCooldownMult ?? 1);
       this.throwTimer = cooldown;
+      this._pendingChargeLevel = 0;
     }
     this.wantThrow = false;
+
+    this._updateActionHUD(dt);
   }
 
   // ── Movement ───────────────────────────────────────────────
@@ -239,27 +330,115 @@ export class Player {
       * (this.isSprinting ? this.cfg.sprintMult : 1)
       * (this.activeEffects.speedMult ?? 1);
 
+    // ── Dodge roll overrides normal movement ────────────────
+    if (this._dodging) {
+      this._dodgeTimer -= dt;
+      const dspeed = this.cfg.dodgeDistance / this.cfg.dodgeDuration;
+      this.position.x += this._dodgeDirX * dspeed * dt;
+      this.position.z += this._dodgeDirZ * dspeed * dt;
+      if (this._dodgeTimer <= 0) this._dodging = false;
+      this._applyVertical(dt);
+      this._clampArena();
+      return;
+    }
+
+    // ── Ice zone detection (ground level only) ──────────────
+    const px = this.position.x, pz = this.position.z;
+    const iceR = CONFIG.iceZone.radius;
+    this.onIce = (px * px + pz * pz < iceR * iceR) && this.feetY < 0.5;
+
+    // ── Build input direction ────────────────────────────────
     const dir = new THREE.Vector3();
     if (this.keys['KeyW']) dir.z -= 1;
     if (this.keys['KeyS']) dir.z += 1;
     if (this.keys['KeyA']) dir.x -= 1;
     if (this.keys['KeyD']) dir.x += 1;
-
     if (this._isMobile) {
       dir.x += this._mobileMove.x;
       dir.z += this._mobileMove.y;
     }
-
     if (dir.lengthSq() > 0) {
-      dir.normalize();
-      dir.applyEuler(new THREE.Euler(0, this.yaw, 0));
-      this.position.addScaledVector(dir, speed * dt);
+      dir.normalize().applyEuler(new THREE.Euler(0, this.yaw, 0));
     }
 
+    if (this.onIce) {
+      // Slippery surface: input accelerates a sliding velocity
+      this._slideVX += dir.x * speed * 3.0 * dt;
+      this._slideVZ += dir.z * speed * 3.0 * dt;
+
+      // Cap slide speed
+      const slideSpd = Math.hypot(this._slideVX, this._slideVZ);
+      const maxSpd   = speed * 1.7;
+      if (slideSpd > maxSpd) {
+        const s = maxSpd / slideSpd;
+        this._slideVX *= s;
+        this._slideVZ *= s;
+      }
+
+      // Ice friction (retain ~20% per second → slides ~2-3 s)
+      const friction = Math.pow(0.2, dt);
+      this._slideVX *= friction;
+      this._slideVZ *= friction;
+
+      this.position.x += this._slideVX * dt;
+      this.position.z += this._slideVZ * dt;
+    } else {
+      // Normal movement
+      if (dir.lengthSq() > 0) this.position.addScaledVector(dir, speed * dt);
+
+      // Residual slide bleeds off quickly after leaving ice
+      this.position.x  += this._slideVX * dt;
+      this.position.z  += this._slideVZ * dt;
+      this._slideVX    *= Math.pow(0.01, dt);
+      this._slideVZ    *= Math.pow(0.01, dt);
+    }
+
+    this._applyVertical(dt);
+    this._clampArena();
+  }
+
+  // ── Jump / gravity ─────────────────────────────────────────
+
+  _applyVertical(dt) {
+    if (!this._grounded) {
+      this._velY -= CONFIG.physics.jumpGravity * dt;
+    }
+    if (this._wantJump && this._grounded) {
+      this._velY     = CONFIG.physics.jumpVelocity;
+      this._grounded = false;
+      this._wantJump = false;
+    }
+
+    this.feetY += this._velY * dt;
+
+    const floorY = this._getFloorAt(this.position.x, this.position.z);
+    if (this.feetY <= floorY) {
+      this.feetY  = floorY;
+      if (this._velY < 0) this._velY = 0;
+      this._grounded = true;
+    } else {
+      this._grounded = false;
+    }
+
+    this.position.y = this.feetY + this.cfg.height;
+  }
+
+  /** Return the floor Y under (x,z). Only snap to platforms when descending. */
+  _getFloorAt(x, z) {
+    if (this._velY <= 0.1) {
+      for (const p of this._platforms) {
+        if (Math.abs(x - p.x) <= p.w / 2 && Math.abs(z - p.z) <= p.d / 2) {
+          return p.y;
+        }
+      }
+    }
+    return 0;
+  }
+
+  _clampArena() {
     const limit = this.cfg.arenaLimit;
     this.position.x = Math.max(-limit, Math.min(limit, this.position.x));
     this.position.z = Math.max(-limit, Math.min(limit, this.position.z));
-    this.position.y = this.cfg.height;
   }
 
   // ── Camera ─────────────────────────────────────────────────
@@ -269,6 +448,13 @@ export class Player {
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
+    // Camera roll during dodge (tactile feedback)
+    if (this._dodging) {
+      const t = 1 - this._dodgeTimer / this.cfg.dodgeDuration;
+      this.camera.rotation.z = -this._dodgeDirX * Math.sin(t * Math.PI) * 0.18;
+    } else {
+      this.camera.rotation.z = 0;
+    }
   }
 
   // ── Throw cooldown ─────────────────────────────────────────
@@ -295,13 +481,24 @@ export class Player {
 
   // ── Snowball throw ─────────────────────────────────────────
 
-  _doThrow() {
+  /**
+   * @param {number} chargeLevel  0 (instant) → 1 (full charge)
+   */
+  _doThrow(chargeLevel = 0) {
     // Base direction: forward vector in view space
     const baseDir = new THREE.Vector3(0, 0, -1);
     baseDir.applyEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
 
-    const speed  = CONFIG.physics.snowballSpeed * (this.activeEffects.snowballSpeedMult  ?? 1);
-    const radius = CONFIG.physics.snowballRadius * (this.activeEffects.snowballRadiusMult ?? 1);
+    // Charge scaling: damage ×1–×3, speed ×1–×1.5, radius ×1–×2
+    const chargeDamageMult = 1 + chargeLevel * 2;
+    const chargeSpeedMult  = 1 + chargeLevel * 0.5;
+    const chargeRadiusMult = 1 + chargeLevel * 1.0;
+
+    const baseDamage = CONFIG.player.baseDamage * this.damageBoost * chargeDamageMult;
+    const speed  = CONFIG.physics.snowballSpeed
+      * (this.activeEffects.snowballSpeedMult ?? 1) * chargeSpeedMult;
+    const radius = CONFIG.physics.snowballRadius
+      * (this.activeEffects.snowballRadiusMult ?? 1) * chargeRadiusMult;
 
     // Firecracker shots
     const explosive = (this.activeEffects.firecrackerShots ?? 0) > 0;
@@ -320,8 +517,42 @@ export class Player {
     for (const dir of directions) {
       const origin = this.position.clone().addScaledVector(dir, 0.7);
       origin.y = this.position.y - 0.1;
-      this.pendingThrows.push({ origin, direction: dir, speed, radius, explosive });
+      this.pendingThrows.push({ origin, direction: dir, speed, radius, explosive, damage: baseDamage });
     }
+  }
+
+  // ── Action HUD ─────────────────────────────────────────────
+
+  _updateActionHUD() {
+    // Charge bar
+    const chargeBar  = document.getElementById('chargeBar');
+    const chargeFill = document.getElementById('chargeFill');
+    if (chargeBar && chargeFill) {
+      const charging = this._mouseHeld && this.throwTimer <= 0;
+      chargeBar.classList.toggle('hidden', !charging);
+      if (charging) {
+        const pct = Math.min(this._chargeTime / this.cfg.chargeMaxTime, 1) * 100;
+        chargeFill.style.width = `${pct}%`;
+      }
+    }
+
+    // Dodge ring (SVG circle progress)
+    const ringFill = document.getElementById('dodgeRingFill');
+    if (ringFill) {
+      const circumference = 94.25;
+      if (this._dodgeCooldown <= 0) {
+        ringFill.style.strokeDashoffset = '0';
+        ringFill.classList.remove('recharging');
+      } else {
+        const progress = 1 - this._dodgeCooldown / this.cfg.dodgeCooldown;
+        ringFill.style.strokeDashoffset = `${circumference * (1 - progress)}`;
+        ringFill.classList.add('recharging');
+      }
+    }
+
+    // Ice indicator
+    const iceEl = document.getElementById('iceIndicator');
+    if (iceEl) iceEl.classList.toggle('hidden', !this.onIce);
   }
 
   /** Rotate a direction vector by yawOffset radians around Y axis. */
@@ -341,6 +572,7 @@ export class Player {
   takeDamage(amount) {
     if (!this.isAlive) return;
     if (this.activeEffects.invincible) return;  // Golden Shield
+    if (this._dodging) return;                  // Dodge roll i-frames
     const reduction = this.activeEffects.damageReduction ?? 0;
     const actual    = amount * (1 - reduction);
     this.health = Math.max(0, this.health - actual);
@@ -420,6 +652,30 @@ export class Player {
     this.pendingThrows   = [];
     this.keys            = {};
     this.wantThrow       = false;
+
+    // Jump / vertical physics
+    this.feetY      = 0;
+    this._velY      = 0;
+    this._grounded  = true;
+    this._wantJump  = false;
+
+    // Ice zone
+    this._slideVX = 0;
+    this._slideVZ = 0;
+    this.onIce    = false;
+
+    // Dodge
+    this._dodging       = false;
+    this._dodgeTimer    = 0;
+    this._dodgeCooldown = 0;
+
+    // Charge
+    this._mouseHeld          = false;
+    this._chargeTime         = 0;
+    this._pendingChargeLevel = 0;
+
+    // Boosts
+    this.damageBoost = 1.0;
 
     // Mobile state
     this._mobileMove      = { x: 0, y: 0 };

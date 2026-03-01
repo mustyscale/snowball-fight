@@ -86,6 +86,14 @@ class Game {
     // Accumulated clock time for tracking combo (seconds)
     this._elapsedTime = 0;
 
+    // Kill streak state
+    this._streakKills  = 0;
+    this._streakTimer  = 0;
+    this._activeStreak = null;
+
+    // Power pedestal state
+    this._pedestalStates = [];  // { timer, ready, glowMat }
+
     // Save data
     this._save = { bestScore: 0, bestWave: 0, totalKills: 0, totalGames: 0 };
 
@@ -160,6 +168,17 @@ class Game {
     this.powerUpSys  = new PowerUps(this.scene);
     this.waveSys     = new Waves(this.enemySys);
 
+    // Wire map platforms to player physics
+    this.player._platforms = this.mapSys.platforms;
+
+    // Init pedestal timers (staggered starts so they don't all fire at once)
+    this._pedestalStates = this.mapSys.pedestals.map((p, i) => ({
+      x:       p.x,
+      z:       p.z,
+      glowMat: p.glowMat,
+      timer:   CONFIG.pedestals.respawnTime * (0.1 + i * 0.3),  // staggered starts
+    }));
+
     this._initSnowballPool();
 
     this.leaderboard = new Leaderboard();
@@ -218,9 +237,22 @@ class Game {
     this.powerUpSys.clear();
     this.particleSys.clear();
 
+    // Reset streaks
+    this._streakKills  = 0;
+    this._streakTimer  = 0;
+    this._activeStreak = null;
+    document.getElementById('streakCounter')?.classList.add('hidden');
+
+    // Reset pedestal timers (staggered)
+    this._pedestalStates.forEach((ped, i) => {
+      ped.timer = CONFIG.pedestals.respawnTime * (0.1 + i * 0.3);
+      if (ped.glowMat) ped.glowMat.emissiveIntensity = 0.1;
+    });
+
     // Clear any wave messages
     document.getElementById('waveMessage')?.classList.add('hidden');
     document.getElementById('bossBar')?.classList.add('hidden');
+    document.getElementById('waveInfo')?.classList.remove('hidden');
     document.getElementById('leaderboardModal')?.classList.add('hidden');
 
     // UI transitions
@@ -268,6 +300,7 @@ class Game {
     document.getElementById('waveMessage')?.classList.add('hidden');
     document.getElementById('mobileControls')?.classList.add('hidden');
     document.getElementById('bossBar')?.classList.add('hidden');
+    document.getElementById('waveInfo')?.classList.remove('hidden');
     document.getElementById('deathScreen').classList.remove('hidden');
 
     if (document.pointerLockElement) document.exitPointerLock();
@@ -329,8 +362,10 @@ class Game {
     // 6c. Boss health bar
     if (this.enemySys.boss?.isAlive) {
       this._updateBossBar();
+      document.getElementById('waveInfo')?.classList.add('hidden');
     } else {
       document.getElementById('bossBar')?.classList.add('hidden');
+      document.getElementById('waveInfo')?.classList.remove('hidden');
     }
 
     // 7. Wave completion check
@@ -353,7 +388,13 @@ class Game {
     // 12. Enemies HUD
     this._updateEnemiesHUD();
 
-    // 13. Player death check
+    // 13. Kill streak decay
+    this._updateStreak(dt);
+
+    // 14. Power pedestals
+    this._updatePedestals(dt);
+
+    // 15. Player death check
     if (!this.player.isAlive) this.gameOver();
   }
 
@@ -419,9 +460,14 @@ class Game {
         continue;
       }
 
-      // Enemy snowball hits player
+      // Enemy snowball hits player — capsule test (foot 0.3 → head 1.7)
       if (!sb.fromPlayer) {
-        const d = p.distanceTo(this.player.position);
+        const feetY = this.player.feetY ?? 0;
+        const capBot = new THREE.Vector3(this.player.position.x, feetY + 0.3, this.player.position.z);
+        const capTop = new THREE.Vector3(this.player.position.x, feetY + 1.7, this.player.position.z);
+        const t      = Math.max(0, Math.min(1, (p.y - capBot.y) / (capTop.y - capBot.y)));
+        const closest = capBot.clone().lerp(capTop, t);
+        const d = p.distanceTo(closest);
         if (d < sb.radius + CONFIG.player.radius) {
           this.player.takeDamage(sb.damage);
           if (this.player.isAlive) {
@@ -440,16 +486,19 @@ class Game {
         const hitResult = this.enemySys.checkHit(p, sb.radius);
         if (hitResult) {
           const { enemy, isHeadshot } = hitResult;
+          const elevated = (this.player.feetY ?? 0) > 1.0;  // on a platform
+          const elevMult = elevated ? 1.25 : 1.0;
           const dmg = isHeadshot
-            ? sb.damage * CONFIG.scoring.headshotMultiplier
-            : sb.damage;
+            ? sb.damage * CONFIG.scoring.headshotMultiplier * elevMult
+            : sb.damage * elevMult;
 
           const died = enemy.takeDamage(dmg);
 
           // Particles
           if (isHeadshot) {
             this.particleSys.headshotBurst(p.clone());
-            this._showWaveMessage('HEADSHOT! ⭐', 'gold', 0.8);
+            const elevated = (this.player.feetY ?? 0) > 1.0;
+            this._showWaveMessage(elevated ? 'HIGH GROUND HEADSHOT! ⭐' : 'HEADSHOT! ⭐', 'gold', 0.8);
           } else {
             this.particleSys.burst(p.clone(), 0xffffff, 12);
           }
@@ -514,6 +563,7 @@ class Game {
 
   _onEnemyKilled(enemy) {
     this.kills++;
+    this._recordStreakKill();
     const points = (enemy.cfg?.score ?? 0) * this.combo;
     this.score  += points;
     this._updateScoreHUD();
@@ -765,6 +815,106 @@ class Game {
     document.getElementById('bossPhase').textContent   = `Phase ${boss.phase + 1}`;
   }
 
+  // ── Kill Streaks ───────────────────────────────────────────
+
+  _recordStreakKill() {
+    this._streakKills++;
+    this._streakTimer = CONFIG.streaks.window;
+
+    const thresholds = CONFIG.streaks.thresholds;
+    for (let i = thresholds.length - 1; i >= 0; i--) {
+      const t = thresholds[i];
+      if (this._streakKills >= t.kills) {
+        if (!this._activeStreak || this._activeStreak.kills < t.kills) {
+          this._activeStreak = t;
+          this._applyStreakBonus(t);
+        }
+        break;
+      }
+    }
+    this._updateStreakHUD();
+  }
+
+  _applyStreakBonus(threshold) {
+    const { type, duration } = threshold;
+    if (type === 'speed') {
+      this.player.activeEffects.streakSpeedMult = threshold.speedMult;
+      this.player.activeEffects.speedMult       = threshold.speedMult;
+      this._showWaveMessage('🔥 3 KILLS — SPEED BOOST!', 'accent', 2);
+      setTimeout(() => {
+        if (this.player.activeEffects.streakSpeedMult === threshold.speedMult) {
+          delete this.player.activeEffects.streakSpeedMult;
+          delete this.player.activeEffects.speedMult;
+        }
+      }, duration * 1000);
+    } else if (type === 'damage') {
+      this.player.damageBoost = threshold.damageMult;
+      this.player.heal(threshold.healAmount ?? 30);
+      this._showWaveMessage('🔥🔥 5 KILLS — POWER SURGE!', 'gold', 2);
+      this._triggerShake(0.07, 0.4);
+      setTimeout(() => {
+        if (this.player.damageBoost === threshold.damageMult) {
+          this.player.damageBoost = 1.0;
+        }
+      }, duration * 1000);
+    } else if (type === 'invincible') {
+      this.player.activeEffects.streakInvincible = true;
+      this.player.activeEffects.invincible       = true;
+      this._showWaveMessage('🔥🔥🔥 7 KILLS — UNSTOPPABLE!', 'gold', 2.5);
+      this._triggerShake(0.15, 0.8);
+      setTimeout(() => {
+        delete this.player.activeEffects.streakInvincible;
+        delete this.player.activeEffects.invincible;
+      }, duration * 1000);
+    }
+  }
+
+  _updateStreak(dt) {
+    if (this._streakTimer > 0) {
+      this._streakTimer -= dt;
+      if (this._streakTimer <= 0) {
+        this._streakKills  = 0;
+        this._activeStreak = null;
+        this._updateStreakHUD();
+      }
+    }
+  }
+
+  _updateStreakHUD() {
+    const el   = document.getElementById('streakCounter');
+    const text = document.getElementById('streakText');
+    if (!el || !text) return;
+    if (this._streakKills >= 3 && this._streakTimer > 0) {
+      const label = this._streakKills >= 7 ? `🔥🔥🔥 ${this._streakKills} KILLS`
+                  : this._streakKills >= 5 ? `🔥🔥 ${this._streakKills} KILLS`
+                  :                          `🔥 ${this._streakKills} KILLS`;
+      text.textContent = label;
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden');
+    }
+  }
+
+  // ── Power Pedestals ────────────────────────────────────────
+
+  _updatePedestals(dt) {
+    for (const ped of this._pedestalStates) {
+      ped.timer -= dt;
+
+      // Pulse glow to show recharge progress
+      if (ped.glowMat) {
+        const progress = 1 - Math.max(0, ped.timer) / CONFIG.pedestals.respawnTime;
+        ped.glowMat.emissiveIntensity = 0.1 + progress * 0.8;
+      }
+
+      if (ped.timer <= 0) {
+        this.powerUpSys.spawn(new THREE.Vector3(ped.x, 1.8, ped.z));
+        ped.timer = CONFIG.pedestals.respawnTime;
+        if (ped.glowMat) ped.glowMat.emissiveIntensity = 0.1;
+      }
+    }
+  }
+
   // ── UI Bindings ────────────────────────────────────────────
 
   _bindUI() {
@@ -802,6 +952,25 @@ class Game {
     });
     document.getElementById('leaderboardBtnDeath')?.addEventListener('click', () => {
       this.leaderboard?.showModal();
+    });
+
+    // Contract address copy button
+    const CA_FULL = 'Gbu7JAKhTVtGyRryg8cYPiKNhonXpUqbrZuCDjfUpump';
+    const caDisplay = document.getElementById('caDisplay');
+    if (caDisplay) caDisplay.textContent = `${CA_FULL.slice(0, 6)}...${CA_FULL.slice(-4)}`;
+
+    document.getElementById('caCopyBtn')?.addEventListener('click', () => {
+      navigator.clipboard?.writeText(CA_FULL).then(() => {
+        const btn   = document.getElementById('caCopyBtn');
+        const label = document.getElementById('caCopyLabel');
+        if (!btn || !label) return;
+        label.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          label.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      }).catch(() => {/* clipboard unavailable */});
     });
   }
 }
